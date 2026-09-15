@@ -1,0 +1,4894 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>耐用物品服役记录</title>
+<meta name="description" content="记录耐用物品的获得、服役与淘汰，以及摊到每天的成本。">
+<style>
+/* =====================================================================
+ * 设计基调：「纸」。暖白底、墨黑字、大圆角卡片、发丝线。
+ * 主体是一页物品卡片流——物品是主角，统计是配角，排在最后且默认折叠。
+ * 分类色只做小面积点缀（卡片左侧细边、图例圆点），不做大色块。
+ * 宽屏时左侧空白处竖着一条「日均花费时序」阶梯线（position: fixed，
+ * 脱离文档流所以不影响居中主栏的布局；窄屏退化成文档流里的横版）。
+ * ===================================================================== */
+:root {
+  color-scheme: light dark;
+  --plane:   #f7f4ed;      /* 页面：暖白纸 */
+  --card:    #fffdf8;      /* 卡片：比纸再白一点 */
+  --surface: #fffdf8;      /* 图表底色（与卡片一致） */
+  --sunken:  #f1ece1;      /* 输入框、备注块 */
+  --ink:     #201d18;
+  --ink-2:   #55504a;
+  --muted:   #7d7568;
+  --hair:    rgba(32, 29, 24, .10);   /* 发丝线 */
+  --hair-2:  rgba(32, 29, 24, .16);
+  --grid:    #e6e0d3;      /* 图表网格 */
+  --axis:    #cec6b5;
+  --accent:  #2a78d6;      /* 单系列数据用色 */
+  --accent-2:#eb6834;      /* 参考线（回本线）＋「减少」一侧的变更点 */
+  --track:   #efeae0;      /* 进度条底槽＝中性浅灰，和填充拉开对比 */
+  --bar-fill:  #6198d9;    /* 回本进度填充＝强调色调浅，够浅让深色字压上去仍可读 */
+  --bar-fill-2:#ec8c64;    /* 已淘汰未回本的填充 */
+  --good:    #1f7a35;
+  --critical:#c0392b;
+  --shadow:  0 1px 1px rgba(70, 58, 38, .04), 0 12px 32px -16px rgba(70, 58, 38, .22);
+  --r:       18px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --plane:   #23211d;    /* 暖炭灰，不是纯黑 */
+    --card:    #2e2b26;
+    --surface: #2e2b26;
+    --sunken:  #3a352e;
+    --ink:     #f4efe6;
+    --ink-2:   #c3bbad;
+    --muted:   #978e80;
+    --hair:    rgba(244, 239, 230, .12);
+    --hair-2:  rgba(244, 239, 230, .20);
+    --grid:    #443e35;
+    --axis:    #5a5348;
+    --accent:  #3987e5;
+    --accent-2:#d95926;
+    --track:   #33302b;
+    --bar-fill:  #376fb1;
+    --bar-fill-2:#ab4e27;
+    --good:    #5fb87a;
+    --critical:#e08a80;
+    --shadow:  0 1px 1px rgba(0, 0, 0, .3), 0 14px 34px -18px rgba(0, 0, 0, .7);
+  }
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+/* 抽屉关闭时停在视口右侧外；clip 只裁横向溢出，不把根元素变成滚动容器。 */
+html, body { overflow-x: clip; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--plane);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, "PingFang SC", "Hiragino Sans GB",
+               "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", sans-serif;
+  font-size: 15px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3 { line-height: 1.35; margin: 0; font-weight: 600; }
+.wrap { max-width: 960px; margin: 0 auto; padding: 40px 20px 120px; }
+.num { font-variant-numeric: tabular-nums; }
+
+/* ---------- 页头 ---------- */
+.site-head {
+  display: flex; gap: 16px; align-items: baseline; justify-content: space-between;
+  flex-wrap: wrap;
+}
+.site-head h1 {
+  font-size: 15px; font-weight: 600; letter-spacing: .14em; color: var(--ink-2);
+}
+.site-sub { color: var(--muted); font-size: 12.5px; }
+
+/* 解锁：安静的文字按钮。只有真有隐藏物品时才出现（见 syncLockAffordance）。 */
+.lock-box { position: relative; }
+.linkbtn {
+  font: inherit; font-size: 13px; color: var(--muted); background: none;
+  border: 0; padding: 4px 0; cursor: pointer;
+  border-bottom: 1px solid var(--hair-2);
+}
+.linkbtn:hover { color: var(--ink); border-bottom-color: currentColor; }
+.linkbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.linkbtn.is-on { color: var(--good); border-bottom-color: currentColor; }
+.lock-form {
+  position: absolute; right: 0; top: calc(100% + 12px); z-index: 40;
+  width: min(288px, calc(100vw - 40px));
+  background: var(--card); border: 1px solid var(--hair);
+  border-radius: 14px; box-shadow: var(--shadow); padding: 16px;
+}
+.lock-form label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 8px; }
+.lock-form input {
+  width: 100%; font: inherit; font-size: 14px; padding: 9px 11px; border-radius: 10px;
+  border: 1px solid var(--hair-2); background: var(--sunken); color: var(--ink);
+}
+.lock-form input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.lock-form .row { display: flex; gap: 8px; margin-top: 12px; }
+.btn {
+  font: inherit; font-size: 13.5px; color: var(--ink);
+  background: transparent; border: 1px solid var(--hair-2);
+  border-radius: 999px; padding: 7px 14px; cursor: pointer;
+}
+.btn:hover { border-color: var(--ink-2); }
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.lock-form .btn { flex: 1; }
+.lock-form .btn.primary { background: var(--ink); border-color: var(--ink); color: var(--plane); }
+.lock-msg { font-size: 12.5px; margin: 10px 0 0; min-height: 1.2em; color: var(--muted); }
+.lock-msg.err { color: var(--critical); }
+.lock-msg.ok  { color: var(--good); }
+
+/* ---------- 开篇那一句话 ---------- */
+.opening { margin: 44px 0 36px; max-width: 30em; }
+.opening .line {
+  margin: 0;
+  font-size: clamp(21px, 3.6vw, 28px); font-weight: 400; line-height: 1.55;
+  letter-spacing: -.01em; color: var(--ink);
+}
+.opening .line .fig {
+  font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.facts {
+  margin: 16px 0 0; font-size: 12.5px; color: var(--muted);
+  display: flex; flex-wrap: wrap; gap: 2px 24px;
+}
+.facts b { font-weight: 500; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+/* 「读数含/不含隐藏物品」那一句：贴着数字，不另开一块 */
+.facts .scope { color: var(--ink-2); }
+.sc-hit { cursor: pointer; fill: transparent; }
+.sc-hit:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+/* 图下面那行注脚（中位数/被剔除的件数）：左对齐贴着图，
+   不要用 .quiet-note —— 那个是居中的空态占位块，不是说明文字 */
+.chart-note {
+  margin: 8px 0 0; font-size: 12px; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.chart-note:empty { display: none; }
+
+/* ---------- 工具条（搜索 / 筛选 / 排序） ---------- */
+.toolbar {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; flex-wrap: wrap; gap: 8px 6px; align-items: center;
+  padding: 10px 0; margin-bottom: 4px;
+  background: var(--plane); border-bottom: 1px solid var(--hair);
+}
+.toolbar input[type="search"], .toolbar select {
+  font: inherit; font-size: 12px; color: var(--ink-2);
+  background: transparent; border: 1px solid var(--hair);
+  border-radius: 999px; padding: 4px 9px; max-width: 100%;
+}
+.toolbar input[type="search"] {
+  flex: 0 1 190px; min-width: 120px; background: var(--card);
+}
+.toolbar select:hover, .toolbar input:hover { border-color: var(--hair-2); }
+.toolbar .spacer { flex: 1 1 auto; }
+.tb-break { flex: 1 0 100%; height: 0; }
+.toolbar .count { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.toolbar .linkbtn { font-size: 12.5px; border-bottom-color: transparent; }
+.seg { display: inline-flex; gap: 2px; }
+.seg button {
+  font: inherit; font-size: 12.5px; border: 1px solid transparent; background: none;
+  color: var(--muted); padding: 5px 9px; cursor: pointer; border-radius: 999px;
+}
+.seg button[aria-pressed="true"] { color: var(--ink); border-color: var(--hair-2); }
+
+/* ---------- 物品卡片流（页面主体） ---------- */
+/* 物品已经三十多件，两列排下来太长了。auto-fill + minmax 让列数跟着宽度走：
+   920px 主栏（960 减去左右 padding）刚好三列，窄了自动退两列、一列。
+   268px 是实测的下限——再窄「¥118.75 每天」那行主数字就要挤到副标上。
+   卡片变小只减留白和字号，不靠截断文字：名称允许折行，meta 那行本来就会折，
+   日期 + 回本条那行加了 wrap，挤不下时换行而不是把进度条压没。 */
+.flow {
+  display: grid; gap: 14px; margin-top: 26px;
+  grid-template-columns: repeat(auto-fill, minmax(268px, 1fr));
+}
+
+.gear-card {
+  position: relative; overflow: hidden;
+  background: var(--card); border: 1px solid var(--hair);
+  border-radius: var(--r); box-shadow: var(--shadow);
+  padding: 18px 18px 16px;
+  /* 单列块排版：图标从前一版那个 26px 的独立列里拿掉了，改成和标题同一行的
+     内联元素——否则底下每一行都要跟着缩进 36px，白白吃掉本来就不宽的卡片。 */
+  display: block;
+  cursor: pointer; text-align: left;
+  transition: box-shadow .16s ease, transform .16s ease;
+}
+.gear-card:hover { box-shadow: 0 2px 2px rgba(70,58,38,.05), 0 18px 40px -18px rgba(70,58,38,.30); }
+.gear-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+/* 分类色：只有这一条 3px 细边 */
+.gear-card::before {
+  content: ""; position: absolute; left: 0; top: 14px; bottom: 14px; width: 3px;
+  border-radius: 0 3px 3px 0; background: var(--cat, var(--axis));
+}
+/* 解锁后并进来的隐藏物品：右上角一枚常驻小锁，一眼认出哪几件是私藏的。
+   文案里另有「🔒 已隐藏」一段，不靠这一个图形承担全部信息。 */
+.gear-card.is-private::after {
+  content: "🔒"; position: absolute; top: 13px; right: 15px;
+  font-size: 11px; line-height: 1; opacity: .5;
+}
+.gear-card.is-private { border-color: var(--hair-2); }
+.gc-icon { font-size: 16px; margin-right: 6px; }
+.gc-head { min-width: 0; }
+/* 卡片里每一行都只占一行，超出直接省略号——卡片高度因此整齐，
+   全名/全部 meta 在 hover 的 title、详情抽屉和表格视图里都拿得到。 */
+.gc-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.gc-head h3 { font-size: 15px; font-weight: 600; letter-spacing: -.005em; line-height: 1.4; }
+.gc-meta { font-size: 12px; color: var(--muted); margin: 2px 0 0; line-height: 1.5; }
+
+/* 主数字行 */
+.gc-figure {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 12px; margin-top: 14px;
+}
+.gc-hero { min-width: 0; }
+.gc-hero .amount {
+  display: block; font-size: clamp(26px, 3.4vw, 30px); font-weight: 300;
+  line-height: 1.05; letter-spacing: -.03em; font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.gc-hero .unit { display: block; font-size: 12px; color: var(--muted); margin-top: 3px; }
+.gc-side { text-align: right; flex: none; }
+.gc-side .status { display: block; font-size: 12.5px; color: var(--ink-2); }
+.gc-side .status.live::before {
+  content: ""; display: inline-block; width: 5px; height: 5px; border-radius: 50%;
+  background: var(--good); vertical-align: middle; margin-right: 6px;
+}
+.gc-side .aside {
+  display: block; font-size: 12px; color: var(--muted); margin-top: 3px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 页脚：日期区间 + 回本进度条 + 一句话 */
+.gc-foot { margin-top: 14px; }
+/* 页脚只剩回本进度条，独占整行：获得/淘汰日期在详情抽屉和表格视图里，
+   卡片上留着挤占的是这一行本来就不宽的横向空间。 */
+.gc-bar {
+  display: block; position: relative; width: 100%; height: 17px;
+  border-radius: 999px; background: var(--track); overflow: hidden;
+  font-variant-numeric: tabular-nums;
+}
+/* 中性灰底槽 + 调浅的填充，两层。填充只能到 2.5:1——再深就压不住上面的字，
+   而字（--ink）压在填充上 5.6:1、压在空槽上 13.6:1，两边都读得清，
+   所以不用为「字在填充里」和「字在空槽里」各配一套颜色。
+   精确进度由条里的百分比数字负责，颜色只给个大概的量感。 */
+.gc-bar > i { display: block; height: 100%; border-radius: 999px; background: var(--bar-fill); }
+/* 已淘汰但没回本：换暖色，和「还在慢慢回本」区分开（文案里也写明了，不靠颜色单独承担） */
+.gc-bar.unpaid > i { background: var(--bar-fill-2); }
+.gc-bar > b {
+  position: absolute; inset: 0; display: flex; align-items: center;
+  padding: 0 8px; font-size: 10.5px; font-weight: 400; color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.gc-note {
+  display: block; font-size: 12px; color: var(--muted); margin: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.gc-note.paid { color: var(--ink-2); }
+.tag { font-size: 11.5px; color: var(--muted); }
+.tags { display: inline-flex; flex-wrap: wrap; gap: 4px 10px; }
+
+/* 按获得年份分栏：栏头横跨整行（grid-column: 1 / -1），所以还是同一张网格，
+   列宽和卡片对齐一个像素不差。左侧曲线的年份刻度直接锚到这里（#y-2024）。 */
+.year-head {
+  grid-column: 1 / -1;
+  display: flex; align-items: baseline; gap: 10px;
+  margin: 18px 0 0; padding-bottom: 6px;
+  border-bottom: 1px solid var(--hair);
+  font-size: 13px; font-weight: 600; letter-spacing: .06em; color: var(--ink-2);
+  /* 工具条是 sticky 的，锚点跳过来别被它盖住 */
+  scroll-margin-top: calc(var(--tb-h, 92px) + 14px);
+}
+.year-head:first-child { margin-top: 0; }
+.year-head .yh-n { font-size: 20px; font-weight: 300; letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums; color: var(--ink); }
+.year-head .yh-x { font-weight: 400; letter-spacing: 0; color: var(--muted); font-size: 12px; }
+/* 从左侧曲线跳过来时短暂点一下，告诉眼睛落在哪 */
+.year-head.flash { animation: yhflash 1.4s ease-out; }
+@keyframes yhflash { from { background: var(--track); } to { background: transparent; } }
+
+/* 曲线上可点的年份刻度 */
+.yr-link { cursor: pointer; }
+.yr-link text { fill: var(--ink-2); text-decoration: underline; text-decoration-style: dotted;
+  text-underline-offset: 2px; }
+.yr-link:hover text, .yr-link:focus-visible text { fill: var(--accent); }
+
+/* 锁着时卡片流末尾那一行安静的字：只有一行，不做逐件占位卡 */
+.hidden-line {
+  margin: 26px 0 0; padding: 14px 2px 0; border-top: 1px solid var(--hair);
+  font-size: 12.5px; color: var(--muted);
+}
+.hidden-line b { font-weight: 500; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+/* ---------- 次要区块 ---------- */
+.sub-sec { margin-top: 64px; }
+.sub-head {
+  display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+  padding-bottom: 10px; border-bottom: 1px solid var(--hair);
+}
+.sub-head h2 { font-size: 13px; font-weight: 600; letter-spacing: .1em; color: var(--ink-2); }
+.sub-head .hint { font-size: 12px; color: var(--muted); }
+.sub-body { padding-top: 18px; }
+
+.chart-wrap { position: relative; }
+.chart-wrap.narrow { max-width: 520px; }
+.chart-wrap svg { display: block; max-width: 100%; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 14px; font-size: 12px; color: var(--muted); }
+.legend .key { display: inline-flex; align-items: center; gap: 6px; }
+.legend .sw { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+.legend .sw.hollow { background: transparent !important; box-shadow: inset 0 0 0 1.5px currentColor; }
+.legend .sw.dot { border-radius: 50%; }
+.tip {
+  position: absolute; z-index: 30; pointer-events: none; opacity: 0; transition: opacity .1s;
+  background: var(--card); border: 1px solid var(--hair-2); box-shadow: var(--shadow);
+  border-radius: 10px; padding: 8px 11px; font-size: 12px; color: var(--muted);
+  max-width: 250px;
+}
+.tip.show { opacity: 1; }
+.tip .t-val { font-size: 13.5px; font-weight: 600; color: var(--ink); display: block; }
+.tip .t-key { display: inline-block; width: 10px; height: 2px; vertical-align: middle; margin-right: 6px; }
+
+/* 曲线上的变更点：命中区比墨点大得多（>=24px），键盘也能走到 */
+.bp-hit { cursor: pointer; fill: transparent; }
+.bp-hit:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+/* 墨点只是墨，命中区才收指针事件（见 renderBurn 里 r=13 的 .bp-hit） */
+.bp-dot { pointer-events: none; }
+.bp-dot.on { stroke-width: 3.5; }
+
+/* ---------- 日均花费时序：宽屏竖在左侧留白里 ---------- */
+/* 参照 wm-blog 的 assets/scss/toc.scss：fixed 定位在居中主栏左侧的空白处，
+   完全脱离文档流，所以主栏宽度、行长、卡片网格一个像素都不会变；
+   放不下侧栏的窄屏上整块不显示，改由文档流里的横版承担（#burn-flow）。 */
+.burn-gutter { display: none; }
+.burn-gutter .bg-title {
+  font-size: 12px; font-weight: 600; letter-spacing: .1em; color: var(--ink-2); margin: 0;
+}
+.burn-gutter .bg-sub { margin: 4px 0 8px; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+.burn-note { margin: 12px 0 0; font-size: 12px; color: var(--muted); }
+.burn-gutter .tip { max-width: 168px; }
+.burn-note b { font-weight: 500; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+/* 480（主栏一半）+ 208（侧栏）+ 24（间距）= 712。
+   另加 min-height：视口太矮时 fixed 的侧栏会被切掉一截，那就干脆让位给横版。
+   这个条件必须和下面 JS 里的 GUTTER_MQ 字面一致——两版永远只显示其中一版。 */
+@media (min-width: 1440px) and (min-height: 560px) {
+  .burn-gutter {
+    display: block; position: fixed; z-index: 10;
+    top: 88px; left: calc(50% - 712px); width: 208px;
+    padding-left: 14px; border-left: 1px solid var(--hair);
+  }
+  /* 宽屏上竖版就是正版，文档流里的横版整块收起，避免重复 */
+  #burn-flow-sec { display: none; }
+}
+/* 打印：fixed 的侧栏不参与分页，改让文档流里的横版出场（上面那条
+   @media 会在宽纸上把它藏掉，这里显式还原） */
+@media print {
+  .burn-gutter { display: none !important; }
+  #burn-flow-sec { display: block !important; }
+}
+
+/* ---------- 折叠的统计 ---------- */
+.fold { margin-top: 64px; border-top: 1px solid var(--hair); }
+.fold > summary {
+  list-style: none; cursor: pointer; padding: 14px 0;
+  font-size: 13px; letter-spacing: .1em; color: var(--muted);
+}
+.fold > summary::-webkit-details-marker { display: none; }
+.fold > summary::before { content: "＋ "; }
+.fold[open] > summary::before { content: "－ "; }
+.fold > summary:hover { color: var(--ink); }
+.fold-body { padding: 6px 0 8px; display: grid; gap: 40px; }
+.stat-block h3 {
+  font-size: 12.5px; font-weight: 600; letter-spacing: .06em; color: var(--ink-2);
+  margin-bottom: 12px;
+}
+.stat-block h3 .hint { font-weight: 400; letter-spacing: 0; color: var(--muted); font-size: 12px; }
+.ledger { font-size: 13.5px; color: var(--ink-2); display: flex; flex-wrap: wrap; gap: 4px 22px; }
+.ledger b { font-weight: 500; color: var(--ink); font-variant-numeric: tabular-nums; }
+
+table.plain { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+table.plain th, table.plain td { padding: 8px 8px; border-bottom: 1px solid var(--hair); text-align: left; }
+table.plain thead th { font-size: 12px; color: var(--muted); font-weight: 500; }
+table.plain tbody tr:last-child td { border-bottom: 0; }
+table.plain td.num, table.plain th.num { text-align: right; font-variant-numeric: tabular-nums; }
+table.plain td.up { color: var(--ink-2); }
+.bp-table-scroll { max-height: 340px; overflow-y: auto; }
+
+.rank { list-style: none; margin: 0; padding: 0; }
+.rank li {
+  display: flex; align-items: baseline; gap: 12px;
+  padding: 8px 0; border-bottom: 1px solid var(--hair); font-size: 13.5px; cursor: pointer;
+}
+.rank li:last-child { border-bottom: 0; }
+.rank .idx { color: var(--muted); font-size: 11.5px; width: 1.3em; flex: none; font-variant-numeric: tabular-nums; }
+.rank .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rank .v { font-variant-numeric: tabular-nums; color: var(--ink); }
+.quiet-note {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 64px; color: var(--muted); font-size: 12.5px; text-align: center;
+}
+
+/* ---------- 表格视图（可选） ---------- */
+/* 窄屏放不下 11 列，给横向滚动兜底。
+   宽屏必须是 overflow: visible——只要这里是滚动容器，表头的 position: sticky
+   就只相对这个容器生效，而它纵向不滚，表头会跟着页面一起滚走（踩过）。 */
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin-top: 22px; }
+@media (min-width: 720px) { .table-scroll { overflow: visible; } }
+/* 窄屏还是滚动容器，粘性表头在里面本来就不成立——显式关掉，
+   不留一个「看着像粘住其实没粘」的样式。 */
+@media (max-width: 719px) { table.items th { position: static; } }
+table.items { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: auto; }
+table.items th, table.items td {
+  text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--hair);
+  /* 默认允许折行，表格才能压进 920px 的主栏；只有数字/日期列保持不断行 */
+  white-space: normal; overflow-wrap: anywhere;
+}
+table.items th {
+  font-size: 12px; font-weight: 500; color: var(--muted);
+  /* 工具条会换行，高度不固定，所以粘在 JS 实测的 --tb-h 下沿 */
+  position: sticky; top: var(--tb-h, 92px); background: var(--plane); z-index: 2;
+  white-space: nowrap;
+}
+table.items th[data-sort] { cursor: pointer; user-select: none; }
+table.items th .arrow { color: var(--ink-2); }
+table.items td.num, table.items th.num {
+  text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+table.items tbody tr { cursor: pointer; }
+table.items tbody tr:hover { background: var(--card); }
+table.items td.name { min-width: 150px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2); white-space: nowrap; }
+.chip .dot { width: 7px; height: 7px; border-radius: 2px; flex: none; }
+
+/* ---------- 详情抽屉 ---------- */
+.backdrop {
+  position: fixed; inset: 0; background: rgba(32, 29, 24, .34);
+  opacity: 0; pointer-events: none; transition: opacity .18s; z-index: 50;
+}
+.backdrop.show { opacity: 1; pointer-events: auto; }
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(500px, 100vw);
+  background: var(--card); border-left: 1px solid var(--hair); box-shadow: var(--shadow);
+  transform: translateX(100%); transition: transform .2s ease; z-index: 60;
+  overflow-y: auto; -webkit-overflow-scrolling: touch;
+  padding: 30px 30px calc(48px + env(safe-area-inset-bottom));
+}
+.drawer.show { transform: none; }
+.drawer-head { display: flex; gap: 14px; align-items: flex-start; justify-content: space-between; }
+.drawer h2 { font-size: 19px; }
+.drawer h3 { font-size: 12.5px; font-weight: 600; letter-spacing: .06em; color: var(--ink-2); }
+.drawer .close {
+  font-size: 19px; line-height: 1; padding: 3px 11px; color: var(--muted);
+  border-color: transparent; flex: none;
+}
+.drawer .close:hover { color: var(--ink); }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 7px 16px; margin: 22px 0 0; font-size: 13.5px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.note-box {
+  margin-top: 22px; padding: 12px 14px; background: var(--sunken);
+  border-radius: 12px; font-size: 13px; color: var(--ink-2);
+}
+.meter { margin-top: 7px; height: 6px; border-radius: 999px; background: var(--track); overflow: hidden; }
+.meter > i { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+
+@media (max-width: 640px) {
+  .wrap { padding: 28px 16px 96px; }
+  .opening { margin: 32px 0 28px; }
+  .gear-card { padding: 16px 16px 14px; }
+  .gear-card::before { top: 12px; bottom: 12px; }
+  .drawer { width: 100vw; border-left: 0; padding: 24px 20px 48px; }
+  .fold-body { gap: 32px; }
+  /* 一条可横向滑动的 pill 行，比堆成三行安静 */
+  .toolbar {
+    flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; gap: 6px;
+    /* 右边缘淡出，暗示这一行还能往右滑 */
+    mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent);
+  }
+  .toolbar::-webkit-scrollbar { display: none; }
+  .toolbar > * { flex: none; }
+  .tb-break { display: none; }
+  .toolbar input[type="search"] { flex: 0 0 150px; }
+  .toolbar .spacer { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .drawer, .backdrop, .gear-card { transition: none; }
+  .year-head.flash { animation: none; }
+}
+@media print {
+  .toolbar, .lock-box, .drawer, .backdrop { display: none !important; }
+  .gear-card { box-shadow: none; break-inside: avoid; }
+}
+</style>
+</head>
+<body>
+
+<!-- §C 日均花费时序（竖版）：宽屏时 fixed 在主栏左侧的留白里。
+     时间**自上而下**，横轴是钱——方向与页面滚动、卡片流一致。
+     脱离文档流，不参与主栏布局；窄屏由 #burn-flow-sec 接手。 -->
+<aside class="burn-gutter" id="burn-gutter" aria-labelledby="h-burn-g">
+  <h2 class="bg-title" id="h-burn-g">日均花费时序</h2>
+  <!-- 侧栏就这一行小字：轴的方向非常规（时间朝下），这个必须说。
+       分段规则和口径说明都移到了文档流里的横版（#burn-flow-scope / 图例）。 -->
+  <p class="bg-sub">时间 ↓ 自上而下　·　横轴＝每天多少钱</p>
+  <div class="chart-wrap" id="burn-gutter-chart"></div>
+</aside>
+
+<div class="wrap">
+
+  <header class="site-head">
+    <div>
+      <h1>耐用物品服役记录</h1>
+      <div class="site-sub" id="site-sub">加载中…</div>
+    </div>
+    <!-- 只有 hidden_count > 0 时才渲染这块（见 syncLockAffordance） -->
+    <div class="lock-box" id="lock-box" hidden>
+      <button class="linkbtn" id="lock-toggle" aria-expanded="false">🔒 显示隐藏物品</button>
+      <form class="lock-form" id="lock-form" hidden>
+        <label for="lock-pw">输入密码以显示隐藏的物品</label>
+        <input type="password" id="lock-pw" autocomplete="current-password" name="password" placeholder="密码">
+        <div class="row">
+          <button type="submit" class="btn primary">显示</button>
+          <button type="button" class="btn" id="lock-cancel">取消</button>
+        </div>
+        <p class="lock-msg" id="lock-msg" role="status" aria-live="polite"></p>
+      </form>
+    </div>
+  </header>
+
+  <!-- §A 开篇一句话 + 一串小字事实 -->
+  <section class="opening" id="opening" aria-label="概览"></section>
+
+  <!-- 工具条：作用于下面的卡片流、时间线与统计 -->
+  <div class="toolbar" id="toolbar" role="search">
+    <input type="search" id="f-q" placeholder="搜索名称 / 品牌 / 备注" aria-label="搜索名称、品牌或备注">
+    <select id="f-cat" aria-label="按分类筛选"></select>
+    <select id="f-status" aria-label="按状态筛选">
+      <option value="">全部状态</option>
+      <option value="in_use">在用</option>
+      <option value="retired">已淘汰</option>
+    </select>
+    <select id="f-period" aria-label="按使用周期筛选"></select>
+    <select id="f-tag" aria-label="按标签筛选"></select>
+    <button class="linkbtn" id="f-reset" type="button">重置</button>
+    <!-- 强制换行：上一行放搜索与筛选，下一行放排序、计数与视图切换。
+         920px 的主栏一行塞不下这十来个控件，与其让「卡片/表格」被挤到
+         第二行孤零零地吊着，不如把断点定死。窄屏（<640px）那条 @media
+         把工具条改成 nowrap 横滑，这个断点在那里要隐藏掉。 -->
+    <span class="tb-break" aria-hidden="true"></span>
+    <select id="f-sort" aria-label="排序方式"></select>
+    <span class="spacer"></span>
+    <span class="count" id="f-count"></span>
+    <div class="seg" role="group" aria-label="卡片分栏方式">
+      <button type="button" id="g-year" aria-pressed="true">按年</button>
+      <button type="button" id="g-flat" aria-pressed="false">不分栏</button>
+    </div>
+    <div class="seg" role="group" aria-label="视图切换">
+      <button type="button" id="v-card" aria-pressed="true">卡片</button>
+      <button type="button" id="v-table" aria-pressed="false">表格</button>
+    </div>
+  </div>
+
+  <!-- §D 物品卡片流：页面主体 -->
+  <main id="flow" class="flow" aria-label="物品清单"></main>
+  <div class="table-scroll" id="list-table" hidden></div>
+  <!-- 锁着时这里只有一行字，不做逐件占位卡；hidden_count === 0 时整块为空 -->
+  <p class="hidden-line" id="hidden-line" hidden></p>
+
+  <!-- §C 日均花费时序（横版）：窄屏的正版，放在文档流里 -->
+  <section class="sub-sec" id="burn-flow-sec" aria-labelledby="h-burn">
+    <div class="sub-head">
+      <h2 id="h-burn">日均花费时序</h2>
+      <span class="hint">阶梯线：添一件抬一级，淘汰一件降一级；点变更点看是哪件物品。时间轴分两段：「2023 及更早」整体压成一段（折断符号处换段），2024 起按真实时间</span>
+    </div>
+    <div class="sub-body">
+      <div class="chart-wrap" id="burn-flow"></div>
+      <div class="legend" id="burn-legend"></div>
+      <p class="burn-note" id="burn-flow-scope"></p>
+    </div>
+  </section>
+
+  <!-- §B 服役时间线：次要 -->
+  <section class="sub-sec" aria-labelledby="h-gantt">
+    <div class="sub-head">
+      <h2 id="h-gantt">服役时间线</h2>
+      <span class="hint">实心＝在用，描边＝已淘汰；点击看详情</span>
+    </div>
+    <div class="sub-body">
+      <div class="chart-wrap" id="gantt"></div>
+      <div class="legend" id="gantt-legend"></div>
+    </div>
+  </section>
+
+  <!-- §E 聚合统计与榜单：默认折叠 -->
+  <details class="fold" id="fold-stats">
+    <summary>更多统计：总账 · 分类 · 频率 · 淘汰原因 · 冷落榜 · 性价比榜 · 变更点表</summary>
+    <div class="fold-body">
+      <div class="stat-block">
+        <h3>总账 <span class="hint">跟随上方筛选</span></h3>
+        <div class="ledger" id="stat-ledger"></div>
+      </div>
+      <div class="stat-block">
+        <h3>分类</h3>
+        <div id="stat-cat"></div>
+      </div>
+      <div class="stat-block">
+        <h3>日均成本 vs 服役天数 <span class="hint">双对数 · 跟随筛选</span></h3>
+        <div class="chart-wrap" id="scatter-cost"></div>
+        <p class="chart-note" id="scatter-note"></p>
+      </div>
+      <div class="stat-block">
+        <h3>日均成本分布 <span class="hint">对数档位分箱 · 跟随筛选</span></h3>
+        <div class="chart-wrap narrow" id="chart-daily"></div>
+        <p class="chart-note" id="chart-daily-note"></p>
+      </div>
+      <div class="stat-block">
+        <h3>使用频率分布 <span class="hint">按年使用次数分桶</span></h3>
+        <div class="chart-wrap narrow" id="chart-freq"></div>
+      </div>
+      <div class="stat-block">
+        <h3>淘汰原因分布</h3>
+        <div class="chart-wrap narrow" id="chart-reason"></div>
+      </div>
+      <div class="stat-block">
+        <h3>冷落榜 <span class="hint">买了没怎么用的 · 按次均成本</span></h3>
+        <div id="rank-cold"></div>
+      </div>
+      <div class="stat-block">
+        <h3>性价比榜 <span class="hint">日均成本最低</span></h3>
+        <div id="rank-value"></div>
+      </div>
+      <div class="stat-block">
+        <h3>日均花费变更点 <span class="hint">上面那条阶梯线的表格版 · 全库口径，不随筛选变</span></h3>
+        <div id="stat-burn"></div>
+      </div>
+    </div>
+  </details>
+
+</div>
+
+<div class="backdrop" id="backdrop"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="d-title" tabindex="-1"></aside>
+
+<script>
+/* ---------------------------------------------------------------------
+ * 四个数据字面量（scripts/build.py 按整块正则替换，勿嵌套进函数）。
+ * 下面是一份与真实契约同形状的占位数据，方便单独打开模板预览；
+ * 构建时会被真实数据整块覆盖。占位密文的密码是 demo。
+ * --------------------------------------------------------------------- */
+const GEAR_META = {
+  "generated_at": "2026-09-16T06:31:34+08:00",
+  "today": "2026-09-16",
+  "currency": "CNY",
+  "currency_symbol": "¥",
+  "worth_it_daily_cost": {
+    "default": 1.0,
+    "电子": 2.0,
+    "家具": 0.5,
+    "服饰": 0.5
+  },
+  "visible_count": 53,
+  "hidden_count": 4,
+  "totals_visible": {
+    "total_price": 76269.79,
+    "total_resale": 2075.56,
+    "total_net_cost": 74194.23,
+    "daily_cost_in_use": 68.7012,
+    "count": 53,
+    "count_in_use": 40,
+    "count_retired": 13,
+    "generated_on": "2026-09-16"
+  },
+  "daily_burn_visible": [
+    {
+      "date": "2015-06-09",
+      "value": 1.0466,
+      "event": {
+        "type": "acquired",
+        "id": "dsc-rx100m3",
+        "name": "DSC-RX100M3",
+        "delta": 1.0466
+      }
+    },
+    {
+      "date": "2017-09-24",
+      "value": 1.3512,
+      "event": {
+        "type": "acquired",
+        "id": "kindle-paperwhite-3",
+        "name": "Kindle Paperwhite 3",
+        "delta": 0.3046
+      }
+    },
+    {
+      "date": "2018-08-03",
+      "value": 4.4853,
+      "event": {
+        "type": "acquired",
+        "id": "t480s-20l7002lcd-8gb-256gb",
+        "name": "T480s (20L7002LCD) 8GB 256GB",
+        "delta": 3.1341
+      }
+    },
+    {
+      "date": "2019-08-27",
+      "value": 5.9209,
+      "event": {
+        "type": "acquired",
+        "id": "ipad-air-3-64gb",
+        "name": "iPad Air 3 - 64GB 银色",
+        "delta": 1.4356
+      }
+    },
+    {
+      "date": "2019-08-27",
+      "value": 8.6872,
+      "event": {
+        "type": "acquired",
+        "id": "mate-20-hma-al00-6gb-128gb",
+        "name": "Mate 20 (HMA-AL00) 6GB+128GB 翡冷翠",
+        "delta": 2.7663
+      }
+    },
+    {
+      "date": "2020-03-06",
+      "value": 10.0805,
+      "event": {
+        "type": "acquired",
+        "id": "nm520-nvme-ssd-512gb",
+        "name": "NM520 NVMe SSD 512GB",
+        "delta": 1.3933
+      }
+    },
+    {
+      "date": "2020-03-08",
+      "value": 10.3104,
+      "event": {
+        "type": "acquired",
+        "id": "ddr4-2400-16gb-pc3lpc4",
+        "name": "内存条 DDR4 2400 16GB (PC3LPC4)",
+        "delta": 0.2299
+      }
+    },
+    {
+      "date": "2020-07-31",
+      "value": 10.7347,
+      "event": {
+        "type": "acquired",
+        "id": "sn750-nvme-ssd-1tb",
+        "name": "SN750 NVMe SSD 1TB",
+        "delta": 0.4243
+      }
+    },
+    {
+      "date": "2020-08-03",
+      "value": 9.3414,
+      "event": {
+        "type": "retired",
+        "id": "nm520-nvme-ssd-512gb",
+        "name": "NM520 NVMe SSD 512GB",
+        "delta": -1.3933,
+        "retired_on": "2020-08-02"
+      }
+    },
+    {
+      "date": "2020-11-01",
+      "value": 10.0038,
+      "event": {
+        "type": "acquired",
+        "id": "freebuds-pro",
+        "name": "FreeBuds Pro 碳晶黑丨有线充版",
+        "delta": 0.6624
+      }
+    },
+    {
+      "date": "2021-03-15",
+      "value": 14.8352,
+      "event": {
+        "type": "acquired",
+        "id": "macbook-pro-13-8gb-256gb",
+        "name": "MacBook Pro 13″深空灰 8GB 256GB",
+        "delta": 4.8314
+      }
+    },
+    {
+      "date": "2021-07-15",
+      "value": 16.9574,
+      "event": {
+        "type": "acquired",
+        "id": "watch-gt2-pro-06b",
+        "name": "WATCH GT2 Pro-06B",
+        "delta": 2.1222
+      }
+    },
+    {
+      "date": "2021-11-05",
+      "value": 17.5383,
+      "event": {
+        "type": "acquired",
+        "id": "aeropex-as800",
+        "name": "Aeropex AS800 环法特别版",
+        "delta": 0.5809
+      }
+    },
+    {
+      "date": "2022-03-12",
+      "value": 17.5807,
+      "event": {
+        "type": "acquired",
+        "id": "s100",
+        "name": "米家电动剃须刀 S100",
+        "delta": 0.0424
+      }
+    },
+    {
+      "date": "2022-07-07",
+      "value": 18.2613,
+      "event": {
+        "type": "acquired",
+        "id": "nm-256g-ncard",
+        "name": "NM存储卡 256G nCARD",
+        "delta": 0.6806
+      }
+    },
+    {
+      "date": "2023-04-23",
+      "value": 17.5807,
+      "event": {
+        "type": "retired",
+        "id": "nm-256g-ncard",
+        "name": "NM存储卡 256G nCARD",
+        "delta": -0.6806,
+        "retired_on": "2023-04-22"
+      }
+    },
+    {
+      "date": "2023-04-23",
+      "value": 14.8144,
+      "event": {
+        "type": "retired",
+        "id": "mate-20-hma-al00-6gb-128gb",
+        "name": "Mate 20 (HMA-AL00) 6GB+128GB 翡冷翠",
+        "delta": -2.7663,
+        "retired_on": "2023-04-22"
+      }
+    },
+    {
+      "date": "2023-04-26",
+      "value": 20.5959,
+      "event": {
+        "type": "acquired",
+        "id": "iphone-14-pro-a2892-256gb",
+        "name": "iPhone 14 Pro (A2892) 256GB 深空黑",
+        "delta": 5.7815
+      }
+    },
+    {
+      "date": "2023-11-12",
+      "value": 21.0019,
+      "event": {
+        "type": "acquired",
+        "id": "k3pro-a3",
+        "name": "K3Pro-A3 白光茶轴",
+        "delta": 0.406
+      }
+    },
+    {
+      "date": "2023-11-25",
+      "value": 22.5589,
+      "event": {
+        "type": "acquired",
+        "id": "redmi-27-4k-hdr400-type-c",
+        "name": "Redmi显示器 27英寸/4K/HDR400/Type-C",
+        "delta": 1.557
+      }
+    },
+    {
+      "date": "2023-11-27",
+      "value": 22.7341,
+      "event": {
+        "type": "acquired",
+        "id": "4a",
+        "name": "小米路由器4A 千兆版",
+        "delta": 0.1752
+      }
+    },
+    {
+      "date": "2024-01-03",
+      "value": 23.0084,
+      "event": {
+        "type": "acquired",
+        "id": "m230",
+        "name": "M230 高品质复古蓝牙便携音箱 绿魔黑",
+        "delta": 0.2743
+      }
+    },
+    {
+      "date": "2024-04-17",
+      "value": 23.2434,
+      "event": {
+        "type": "acquired",
+        "id": "1s",
+        "name": "米家智能显示器屏幕挂灯1S",
+        "delta": 0.235
+      }
+    },
+    {
+      "date": "2024-04-26",
+      "value": 25.9883,
+      "event": {
+        "type": "acquired",
+        "id": "pico-4-a8110-8-128g",
+        "name": "PICO 4 (A8110) 8+128G",
+        "delta": 2.7449
+      }
+    },
+    {
+      "date": "2024-05-10",
+      "value": 28.0534,
+      "event": {
+        "type": "acquired",
+        "id": "forerunner-255",
+        "name": "Forerunner 255 神秘灰",
+        "delta": 2.0651
+      }
+    },
+    {
+      "date": "2024-05-11",
+      "value": 25.9312,
+      "event": {
+        "type": "retired",
+        "id": "watch-gt2-pro-06b",
+        "name": "WATCH GT2 Pro-06B",
+        "delta": -2.1222,
+        "retired_on": "2024-05-10"
+      }
+    },
+    {
+      "date": "2024-06-08",
+      "value": 25.9312,
+      "event": {
+        "type": "acquired",
+        "id": "a1642-10000mah",
+        "name": "磁吸充电宝 A1642 10000mAh",
+        "delta": 0.0
+      }
+    },
+    {
+      "date": "2024-06-08",
+      "value": 26.6048,
+      "event": {
+        "type": "acquired",
+        "id": "mt3-41",
+        "name": "MT3 越野跑步鞋 灰色 41",
+        "delta": 0.6736
+      }
+    },
+    {
+      "date": "2024-08-05",
+      "value": 26.6953,
+      "event": {
+        "type": "acquired",
+        "id": "pro-2",
+        "name": "米家电子温湿度计Pro",
+        "delta": 0.0905
+      }
+    },
+    {
+      "date": "2024-08-08",
+      "value": 27.4706,
+      "event": {
+        "type": "acquired",
+        "id": "ih",
+        "name": "米家智能IH多功能料理锅",
+        "delta": 0.7753
+      }
+    },
+    {
+      "date": "2024-08-10",
+      "value": 27.5474,
+      "event": {
+        "type": "acquired",
+        "id": "3-bhr6097cn",
+        "name": "米家智能插座3 (BHR6097CN)",
+        "delta": 0.0768
+      }
+    },
+    {
+      "date": "2024-08-10",
+      "value": 27.7118,
+      "event": {
+        "type": "acquired",
+        "id": "pro",
+        "name": "小爱音箱 Pro",
+        "delta": 0.1644
+      }
+    },
+    {
+      "date": "2024-08-22",
+      "value": 27.9764,
+      "event": {
+        "type": "acquired",
+        "id": "sy-100",
+        "name": "SY-100",
+        "delta": 0.2646
+      }
+    },
+    {
+      "date": "2024-08-28",
+      "value": 29.0417,
+      "event": {
+        "type": "acquired",
+        "id": "wd-red-plus-4tb-wd40efpx",
+        "name": "WD Red Plus 4TB (WD40EFPX)",
+        "delta": 1.0653
+      }
+    },
+    {
+      "date": "2024-08-28",
+      "value": 29.731,
+      "event": {
+        "type": "acquired",
+        "id": "12tb",
+        "name": "企业级氦气硬盘12TB",
+        "delta": 0.6893
+      }
+    },
+    {
+      "date": "2024-09-23",
+      "value": 36.6343,
+      "event": {
+        "type": "acquired",
+        "id": "pcr-ltd2",
+        "name": "PCR LTD2",
+        "delta": 6.9033
+      }
+    },
+    {
+      "date": "2024-10-05",
+      "value": 36.848,
+      "event": {
+        "type": "acquired",
+        "id": "h501-se-gsh509lf",
+        "name": "高速吹风机H501 SE 蓝色 (GSH509LF)",
+        "delta": 0.2137
+      }
+    },
+    {
+      "date": "2024-10-11",
+      "value": 46.4786,
+      "event": {
+        "type": "acquired",
+        "id": "geekpro-i7-14700f-4060ti-32g-1tb",
+        "name": "GeekPro i7-14700F 4060Ti 32G 1TB",
+        "delta": 9.6306
+      }
+    },
+    {
+      "date": "2024-10-18",
+      "value": 46.7765,
+      "event": {
+        "type": "acquired",
+        "id": "pro-hd",
+        "name": "手柄 Pro-HD 赤兔红",
+        "delta": 0.2979
+      }
+    },
+    {
+      "date": "2024-10-20",
+      "value": 46.9741,
+      "event": {
+        "type": "acquired",
+        "id": "cpu-hp600",
+        "name": "CPU风冷散热器 HP600黑色六热管下压",
+        "delta": 0.1976
+      }
+    },
+    {
+      "date": "2024-11-08",
+      "value": 46.9349,
+      "event": {
+        "type": "acquired",
+        "id": "s21gs-pro",
+        "name": "S21GS PRO 空间音频版",
+        "delta": -0.0392
+      }
+    },
+    {
+      "date": "2024-11-14",
+      "value": 47.8273,
+      "event": {
+        "type": "acquired",
+        "id": "momentum-4",
+        "name": "MOMENTUM 4 曜金黑",
+        "delta": 0.8924
+      }
+    },
+    {
+      "date": "2024-11-15",
+      "value": 47.1649,
+      "event": {
+        "type": "retired",
+        "id": "freebuds-pro",
+        "name": "FreeBuds Pro 碳晶黑丨有线充版",
+        "delta": -0.6624,
+        "retired_on": "2024-11-14"
+      }
+    },
+    {
+      "date": "2024-12-12",
+      "value": 47.6915,
+      "event": {
+        "type": "acquired",
+        "id": "mjybamy01ymyy",
+        "name": "智能腰部按摩仪 (MJYBAMY01YMYY)",
+        "delta": 0.5266
+      }
+    },
+    {
+      "date": "2025-01-19",
+      "value": 48.6428,
+      "event": {
+        "type": "acquired",
+        "id": "650-we6610-180-100a",
+        "name": "650蓬鸭绒羽绒服 WE6610 (180/100A)",
+        "delta": 0.9513
+      }
+    },
+    {
+      "date": "2025-02-07",
+      "value": 49.1334,
+      "event": {
+        "type": "acquired",
+        "id": "2l-olk-oy06",
+        "name": "立时空气炸锅 2L (OLK-OY06\n)",
+        "delta": 0.4906
+      }
+    },
+    {
+      "date": "2025-02-09",
+      "value": 49.4371,
+      "event": {
+        "type": "acquired",
+        "id": "ssxcq01xy",
+        "name": "小米随手吸尘器 (SSXCQ01XY)",
+        "delta": 0.3037
+      }
+    },
+    {
+      "date": "2025-03-04",
+      "value": 49.4763,
+      "event": {
+        "type": "retired",
+        "id": "s21gs-pro",
+        "name": "S21GS PRO 空间音频版",
+        "delta": 0.0392,
+        "retired_on": "2025-03-03"
+      }
+    },
+    {
+      "date": "2025-03-07",
+      "value": 48.5839,
+      "event": {
+        "type": "retired",
+        "id": "momentum-4",
+        "name": "MOMENTUM 4 曜金黑",
+        "delta": -0.8924,
+        "retired_on": "2025-03-06"
+      }
+    },
+    {
+      "date": "2025-03-17",
+      "value": 48.4195,
+      "event": {
+        "type": "retired",
+        "id": "pro",
+        "name": "小爱音箱 Pro",
+        "delta": -0.1644,
+        "retired_on": "2025-03-16"
+      }
+    },
+    {
+      "date": "2025-03-23",
+      "value": 48.8562,
+      "event": {
+        "type": "acquired",
+        "id": "xiaomi-pro-oh2p",
+        "name": "Xiaomi智能音箱Pro (OH2P)",
+        "delta": 0.4367
+      }
+    },
+    {
+      "date": "2025-05-14",
+      "value": 50.0969,
+      "event": {
+        "type": "acquired",
+        "id": "sports-fit-mrf-23a-025aa",
+        "name": "Sports Fit (MRF-23A-025AA)",
+        "delta": 1.2407
+      }
+    },
+    {
+      "date": "2025-05-15",
+      "value": 52.596,
+      "event": {
+        "type": "acquired",
+        "id": "item-8cb6c9",
+        "name": "雨舞者 石板绿",
+        "delta": 2.4991
+      }
+    },
+    {
+      "date": "2025-05-27",
+      "value": 53.5725,
+      "event": {
+        "type": "acquired",
+        "id": "skagit-nf0a48ma-tob-40-5",
+        "name": "SKAGIT (NF0A48MA-TOB) 米白 40.5",
+        "delta": 0.9765
+      }
+    },
+    {
+      "date": "2025-06-06",
+      "value": 53.9518,
+      "event": {
+        "type": "acquired",
+        "id": "nas-ups-bk1100-600w-1000va",
+        "name": "NAS UPS BK1100 - 600W (1000VA)",
+        "delta": 0.3793
+      }
+    },
+    {
+      "date": "2025-06-13",
+      "value": 54.2341,
+      "event": {
+        "type": "acquired",
+        "id": "be3600-2-5g",
+        "name": "小米路由器BE3600 2.5G",
+        "delta": 0.2823
+      }
+    },
+    {
+      "date": "2025-06-13",
+      "value": 54.4887,
+      "event": {
+        "type": "acquired",
+        "id": "se106-pro-2-5g",
+        "name": "SE106 Pro 2.5G智能网管交换机",
+        "delta": 0.2546
+      }
+    },
+    {
+      "date": "2025-06-14",
+      "value": 54.3135,
+      "event": {
+        "type": "retired",
+        "id": "4a",
+        "name": "小米路由器4A 千兆版",
+        "delta": -0.1752,
+        "retired_on": "2025-06-13"
+      }
+    },
+    {
+      "date": "2025-06-19",
+      "value": 56.8827,
+      "event": {
+        "type": "acquired",
+        "id": "item-2b1f1f",
+        "name": "优b雄鹰 银白-云感科技座垫",
+        "delta": 2.5692
+      }
+    },
+    {
+      "date": "2025-08-09",
+      "value": 56.8827,
+      "event": {
+        "type": "retired",
+        "id": "a1642-10000mah",
+        "name": "磁吸充电宝 A1642 10000mAh",
+        "delta": 0.0,
+        "retired_on": "2025-08-08"
+      }
+    },
+    {
+      "date": "2026-02-14",
+      "value": 57.4085,
+      "event": {
+        "type": "acquired",
+        "id": "earpods-usb-c",
+        "name": "EarPods USB-C",
+        "delta": 0.5258
+      }
+    },
+    {
+      "date": "2026-05-14",
+      "value": 70.2164,
+      "event": {
+        "type": "acquired",
+        "id": "turbo-5-max-12gb-256gb",
+        "name": "Turbo 5 Max 海风蓝 12GB+256GB",
+        "delta": 12.8079
+      }
+    },
+    {
+      "date": "2026-05-31",
+      "value": 69.8104,
+      "event": {
+        "type": "retired",
+        "id": "k3pro-a3",
+        "name": "K3Pro-A3 白光茶轴",
+        "delta": -0.406,
+        "retired_on": "2026-05-30"
+      }
+    },
+    {
+      "date": "2026-06-01",
+      "value": 64.979,
+      "event": {
+        "type": "retired",
+        "id": "macbook-pro-13-8gb-256gb",
+        "name": "MacBook Pro 13″深空灰 8GB 256GB",
+        "delta": -4.8314,
+        "retired_on": "2026-05-31"
+      }
+    },
+    {
+      "date": "2026-06-03",
+      "value": 69.2821,
+      "event": {
+        "type": "acquired",
+        "id": "z7max",
+        "name": "Z7Max 定制款-生命计划-深空灰",
+        "delta": 4.3031
+      }
+    },
+    {
+      "date": "2026-09-13",
+      "value": 68.7012,
+      "event": {
+        "type": "retired",
+        "id": "aeropex-as800",
+        "name": "Aeropex AS800 环法特别版",
+        "delta": -0.5809,
+        "retired_on": "2026-09-12"
+      }
+    },
+    {
+      "date": "2026-09-16",
+      "value": 68.7012,
+      "event": {
+        "type": "today"
+      }
+    }
+  ]
+};
+
+const GEAR_SCHEMA = {
+  "currency": "CNY",
+  "currency_symbol": "¥",
+  "categories": {
+    "电子": {
+      "color": "#4C6EF5",
+      "icon": "💻"
+    },
+    "家电": {
+      "color": "#15AABF",
+      "icon": "🔌"
+    },
+    "服饰": {
+      "color": "#F06595",
+      "icon": "🧥"
+    },
+    "鞋履": {
+      "color": "#E8590C",
+      "icon": "👟"
+    },
+    "配件": {
+      "color": "#7950F2",
+      "icon": "🎒"
+    },
+    "家具": {
+      "color": "#2F9E44",
+      "icon": "🪑"
+    },
+    "厨具": {
+      "color": "#C2255C",
+      "icon": "🍳"
+    },
+    "出行": {
+      "color": "#1098AD",
+      "icon": "🚲"
+    },
+    "文具": {
+      "color": "#868E96",
+      "icon": "✏️"
+    },
+    "其他": {
+      "color": "#495057",
+      "icon": "📦"
+    }
+  },
+  "periods": {
+    "daily": {
+      "label": "每天",
+      "per_year": 365,
+      "rank": 4
+    },
+    "weekly": {
+      "label": "每周",
+      "per_year": 52,
+      "rank": 3
+    },
+    "monthly": {
+      "label": "每月",
+      "per_year": 12,
+      "rank": 2
+    },
+    "yearly": {
+      "label": "每年",
+      "per_year": 1,
+      "rank": 1
+    }
+  },
+  "retire_reasons": [
+    "损坏",
+    "丢失",
+    "送人",
+    "卖出",
+    "换新",
+    "闲置",
+    "消耗殆尽"
+  ],
+  "worth_it_daily_cost": {
+    "default": 1.0,
+    "电子": 2.0,
+    "家具": 0.5,
+    "服饰": 0.5
+  }
+};
+
+const GEAR_ITEMS = [
+  {
+    "id": "z7max",
+    "name": "Z7Max 定制款-生命计划-深空灰",
+    "brand": "Keychron",
+    "category": "电子",
+    "acquired": "2026-06-03",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 106,
+    "status": "in_use",
+    "period": "daily",
+    "period_label": "每天",
+    "times": 1,
+    "uses_per_year": 365,
+    "use_label": "每天",
+    "tags": [
+      "生产力"
+    ],
+    "note": "用了就回不去了，皮肤也值，WHO AM I?",
+    "price": 456.13,
+    "source": "京东",
+    "resale": null,
+    "net_cost": 456.13,
+    "daily_cost": 4.3031,
+    "uses": 106.0,
+    "cost_per_use": 4.3031,
+    "payback_date": "2027-01-18",
+    "hidden": false
+  },
+  {
+    "id": "turbo-5-max-12gb-256gb",
+    "name": "Turbo 5 Max 海风蓝 12GB+256GB",
+    "brand": "Redmi",
+    "category": "电子",
+    "acquired": "2026-05-14",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 126,
+    "status": "in_use",
+    "period": "daily",
+    "period_label": "每天",
+    "times": 1,
+    "uses_per_year": 365,
+    "use_label": "每天",
+    "tags": [
+      "娱乐",
+      "生活"
+    ],
+    "note": "屏幕大电池大的家用娱乐机。视频播放对比iphone并不流畅。",
+    "price": 1613.79,
+    "source": "天猫",
+    "resale": null,
+    "net_cost": 1613.79,
+    "daily_cost": 12.8079,
+    "uses": 126.0,
+    "cost_per_use": 12.8079,
+    "payback_date": "2028-07-29",
+    "hidden": false
+  },
+  {
+    "id": "earpods-usb-c",
+    "name": "EarPods USB-C",
+    "brand": "Apple",
+    "category": "电子",
+    "acquired": "2026-02-14",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 215,
+    "status": "in_use",
+    "period": "weekly",
+    "period_label": "每周",
+    "times": 5,
+    "uses_per_year": 260,
+    "use_label": "每周 5 次",
+    "tags": [
+      "音乐",
+      "工作"
+    ],
+    "note": "主要用于线上会议的工作耳机，偶然用来应急。",
+    "price": 113.05,
+    "source": "京东自营",
+    "resale": null,
+    "net_cost": 113.05,
+    "daily_cost": 0.5258,
+    "uses": 153.1507,
+    "cost_per_use": 0.7382,
+    "payback_date": "2026-04-12",
+    "hidden": false
+  },
+  {
+    "id": "item-2b1f1f",
+    "name": "优b雄鹰 银白-云感科技座垫",
+    "brand": "保友",
+    "category": "家具",
+    "acquired": "2025-06-19",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 455,
+    "status": "in_use",
+    "period": "daily",
+    "period_label": "每天",
+    "times": 1,
+    "uses_per_year": 365,
+    "use_label": "每天",
+    "tags": [
+      "生活",
+      "生产力"
+    ],
+    "note": "人体工学椅，实际上并不舒适。",
+    "price": 1168.97,
+    "source": "天猫",
+    "resale": null,
+    "net_cost": 1168.97,
+    "daily_cost": 2.5692,
+    "uses": 455.0,
+    "cost_per_use": 2.5692,
+    "payback_date": "2031-11-13",
+    "hidden": false
+  },
+  {
+    "id": "be3600-2-5g",
+    "name": "小米路由器BE3600 2.5G",
+    "brand": "Xiaomi",
+    "category": "电子",
+    "acquired": "2025-06-13",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 461,
+    "status": "in_use",
+    "period": "daily",
+    "period_label": "每天",
+    "times": 1,
+    "uses_per_year": 365,
+    "use_label": "每天",
+    "tags": [
+      "网络设备"
+    ],
+    "note": null,
+    "price": 130.15,
+    "source": "京东自营",
+    "resale": null,
+    "net_cost": 130.15,
+    "daily_cost": 0.2823,
+    "uses": 461.0,
+    "cost_per_use": 0.2823,
+    "payback_date": "2025-08-18",
+    "hidden": false
+  },
+  {
+    "id": "se106-pro-2-5g",
+    "name": "SE106 Pro 2.5G智能网管交换机",
+    "brand": "MERCURY",
+    "category": "电子",
+    "acquired": "2025-06-13",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 461,
+    "status": "in_use",
+    "period": "daily",
+    "period_label": "每天",
+    "times": 1,
+    "uses_per_year": 365,
+    "use_label": "每天",
+    "tags": [
+      "网络设备"
+    ],
+    "note": null,
+    "price": 117.36,
+    "source": "京东自营",
+    "resale": null,
+    "net_cost": 117.36,
+    "daily_cost": 0.2546,
+    "uses": 461.0,
+    "cost_per_use": 0.2546,
+    "payback_date": "2025-08-11",
+    "hidden": false
+  },
+  {
+    "id": "nas-ups-bk1100-600w-1000va",
+    "name": "NAS UPS BK1100 - 600W (1000VA)",
+    "brand": "普迪斯盾",
+    "category": "电子",
+    "acquired": "2025-06-06",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 468,
+    "status": "in_use",
+    "period": "daily",
+    "period_label": "每天",
+    "times": 1,
+    "uses_per_year": 365,
+    "use_label": "每天",
+    "tags": [
+      "生产力"
+    ],
+    "note": "好价买入，打雷停电救过命。",
+    "price": 177.52,
+    "source": "天猫",
+    "resale": null,
+    "net_cost": 177.52,
+    "daily_cost": 0.3793,
+    "uses": 468.0,
+    "cost_per_use": 0.3793,
+    "payback_date": "2025-09-03",
+    "hidden": false
+  },
+  {
+    "id": "skagit-nf0a48ma-tob-40-5",
+    "name": "SKAGIT (NF0A48MA-TOB) 米白 40.5",
+    "brand": "THE NORTH FACE",
+    "category": "鞋履",
+    "acquired": "2025-05-27",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 478,
+    "status": "in_use",
+    "period": "weekly",
+    "period_label": "每周",
+    "times": 2,
+    "uses_per_year": 104,
+    "use_label": "每周 2 次",
+    "tags": [
+      "生活",
+      "旅行"
+    ],
+    "note": "替换战损的黑色同款。一脚蹬便携神鞋。",
+    "price": 466.77,
+    "source": "淘宝",
+    "resale": null,
+    "net_cost": 466.77,
+    "daily_cost": 0.9765,
+    "uses": 136.1973,
+    "cost_per_use": 3.4272,
+    "payback_date": "2026-09-06",
+    "hidden": false
+  },
+  {
+    "id": "item-8cb6c9",
+    "name": "雨舞者 石板绿",
+    "brand": "mont·bell",
+    "category": "服饰",
+    "acquired": "2025-05-15",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 490,
+    "status": "in_use",
+    "period": "yearly",
+    "period_label": "每年",
+    "times": 4,
+    "uses_per_year": 4,
+    "use_label": "每年 4 次",
+    "tags": [
+      "户外",
+      "旅行"
+    ],
+    "note": "在池袋冲动消费的结果。只在旅行时轻装步行的雨天适用，购买后至今使用机会极少。但总会有高光时刻的。",
+    "price": 1224.58,
+    "source": "线下门店",
+    "resale": null,
+    "net_cost": 1224.58,
+    "daily_cost": 2.4991,
+    "uses": 5.3699,
+    "cost_per_use": 228.0468,
+    "payback_date": "2032-01-29",
+    "hidden": false
+  },
+  {
+    "id": "sports-fit-mrf-23a-025aa",
+    "name": "Sports Fit (MRF-23A-025AA)",
+    "brand": "JINS",
+    "category": "配件",
+    "acquired": "2025-05-14",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 491,
+    "status": "in_use",
+    "period": "weekly",
+    "period_label": "每周",
+    "times": 5,
+    "uses_per_year": 260,
+    "use_label": "每周 5 次",
+    "tags": [
+      "生活",
+      "运动"
+    ],
+    "note": "独特的运动型镜框。球面镜夜间开车散光？",
+    "price": 609.16,
+    "source": "线下门店",
+    "resale": null,
+    "net_cost": 609.16,
+    "daily_cost": 1.2407,
+    "uses": 349.7534,
+    "cost_per_use": 1.7417,
+    "payback_date": "2027-01-14",
+    "hidden": false
+  },
+  {
+    "id": "xiaomi-pro-oh2p",
+    "name": "Xiaomi智能音箱Pro (OH2P)",
+    "brand": "Xiaomi",
+    "category": "电子",
+    "acquired": "2025-03-23",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 543,
+    "status": "in_use",
+    "period": "daily",
+    "period_label": "每天",
+    "times": 1,
+    "uses_per_year": 365,
+    "use_label": "每天",
+    "tags": [
+      "生活",
+      "音乐",
+      "娱乐"
+    ],
+    "note": "需要作为蓝牙网关；替换上一代产品。",
+    "price": 237.15,
+    "source": "京东自营",
+    "resale": null,
+    "net_cost": 237.15,
+    "daily_cost": 0.4367,
+    "uses": 543.0,
+    "cost_per_use": 0.4367,
+    "payback_date": "2025-07-20",
+    "hidden": false
+  },
+  {
+    "id": "ssxcq01xy",
+    "name": "小米随手吸尘器 (SSXCQ01XY)",
+    "brand": "Xiaomi",
+    "category": "家电",
+    "acquired": "2025-02-09",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 585,
+    "status": "in_use",
+    "period": "monthly",
+    "period_label": "每月",
+    "times": 5,
+    "uses_per_year": 60,
+    "use_label": "每月 5 次",
+    "tags": [
+      "家居",
+      "清洁"
+    ],
+    "note": "用来吸鸽子笼的灰。",
+    "price": 177.65,
+    "source": "京东自营",
+    "resale": null,
+    "net_cost": 177.65,
+    "daily_cost": 0.3037,
+    "uses": 96.1644,
+    "cost_per_use": 1.8474,
+    "payback_date": "2025-08-06",
+    "hidden": false
+  },
+  {
+    "id": "2l-olk-oy06",
+    "name": "立时空气炸锅 2L (OLK-OY06\n)",
+    "brand": "olayks",
+    "category": "厨具",
+    "acquired": "2025-02-07",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 587,
+    "status": "in_use",
+    "period": "weekly",
+    "period_label": "每周",
+    "times": 2,
+    "uses_per_year": 104,
+    "use_label": "每周 2 次",
+    "tags": [
+      "烹饪"
+    ],
+    "note": null,
+    "price": 287.99,
+    "source": "京东自营",
+    "resale": null,
+    "net_cost": 287.99,
+    "daily_cost": 0.4906,
+    "uses": 167.2548,
+    "cost_per_use": 1.7219,
+    "payback_date": "2025-11-22",
+    "hidden": false
+  },
+  {
+    "id": "650-we6610-180-100a",
+    "name": "650蓬鸭绒羽绒服 WE6610 (180/100A)",
+    "brand": "Columbia",
+    "category": "服饰",
+    "acquired": "2025-01-19",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 606,
+    "status": "in_use",
+    "period": "yearly",
+    "period_label": "每年",
+    "times": 40,
+    "uses_per_year": 40,
+    "use_label": "每年 40 次",
+    "tags": [
+      "生活"
+    ],
+    "note": "最近一次购买的冬季外套。外出穿，室内还是不够轻便。",
+    "price": 576.49,
+    "source": "京东",
+    "resale": null,
+    "net_cost": 576.49,
+    "daily_cost": 0.9513,
+    "uses": 66.411,
+    "cost_per_use": 8.6806,
+    "payback_date": "2028-03-17",
+    "hidden": false
+  },
+  {
+    "id": "mjybamy01ymyy",
+    "name": "智能腰部按摩仪 (MJYBAMY01YMYY)",
+    "brand": "Xiaomi",
+    "category": "家电",
+    "acquired": "2024-12-12",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 644,
+    "status": "in_use",
+    "period": "yearly",
+    "period_label": "每年",
+    "times": 20,
+    "uses_per_year": 20,
+    "use_label": "每年 20 次",
+    "tags": [
+      "家居",
+      "娱乐"
+    ],
+    "note": "没有合适的椅子了就开始吃灰。",
+    "price": 339.15,
+    "source": "京东自营",
+    "resale": null,
+    "net_cost": 339.15,
+    "daily_cost": 0.5266,
+    "uses": 35.2877,
+    "cost_per_use": 9.611,
+    "payback_date": "2025-11-17",
+    "hidden": false
+  },
+  {
+    "id": "momentum-4",
+    "name": "MOMENTUM 4 曜金黑",
+    "brand": "Sennheiser",
+    "category": "电子",
+    "acquired": "2024-11-14",
+    "retired": "2025-03-06",
+    "retire_reason": "卖出",
+    "days_held": 113,
+    "status": "retired",
+    "period": "daily",
+    "period_label": "每天",
+    "times": 1,
+    "uses_per_year": 365,
+    "use_label": "每天",
+    "tags": [
+      "音乐"
+    ],
+    "note": "坐班时听歌降噪救命的。",
+    "price": 1099.2,
+    "source": "京东自营",
+    "resale": 998.36,
+    "net_cost": 100.84,
+    "daily_cost": 0.8924,
+    "uses": 113.0,
+    "cost_per_use": 0.8924,
+    "payback_date": "2025-01-04",
+    "hidden": false
+  },
+  {
+    "id": "s21gs-pro",
+    "name": "S21GS PRO 空间音频版",
+    "brand": "XIBERIA",
+    "category": "电子",
+    "acquired": "2024-11-08",
+    "retired": "2025-03-03",
+    "retire_reason": "卖出",
+    "days_held": 116,
+    "status": "retired",
+    "period": "weekly",
+    "period_label": "每周",
+    "times": 2,
+    "uses_per_year": 104,
+    "use_label": "每周 2 次",
+    "tags": [
+      "娱乐"
+    ],
+    "note": "玩了几次PUBG就闲置了。",
+    "price": 293.65,
+    "source": "京东自营",
+    "resale": 298.2,
+    "net_cost": -4.55,
+    "daily_cost": -0.0392,
+    "uses": 33.0521,
+    "cost_per_use": -0.1377,
+    "payback_date": "2024-11-08",
+    "hidden": false
+  },
+  {
+    "id": "cpu-hp600",
+    "name": "CPU风冷散热器 HP600黑色六热管下压",
+    "brand": "JONSBO",
+    "category": "电子",
+    "acquired": "2024-10-20",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 697,
+    "status": "in_use",
+    "period": "monthly",
+    "period_label": "每月",
+    "times": 1,
+    "uses_per_year": 12,
+    "use_label": "每月",
+    "tags": [
+      "娱乐"
+    ],
+    "note": null,
+    "price": 137.76,
+    "source": "京东自营",
+    "resale": null,
+    "net_cost": 137.76,
+    "daily_cost": 0.1976,
+    "uses": 22.9151,
+    "cost_per_use": 6.0118,
+    "payback_date": "2024-12-28",
+    "hidden": false
+  },
+  {
+    "id": "pro-hd",
+    "name": "手柄 Pro-HD 赤兔红",
+    "brand": "MOBAPAD",
+    "category": "电子",
+    "acquired": "2024-10-18",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 699,
+    "status": "in_use",
+    "period": "monthly",
+    "period_label": "每月",
+    "times": 3,
+    "uses_per_year": 36,
+    "use_label": "每月 3 次",
+    "tags": [
+      "娱乐"
+    ],
+    "note": "没有手柄怎么玩模拟器呢？值回票钱了。",
+    "price": 208.26,
+    "source": "京东自营",
+    "resale": null,
+    "net_cost": 208.26,
+    "daily_cost": 0.2979,
+    "uses": 68.9425,
+    "cost_per_use": 3.0208,
+    "payback_date": "2025-01-31",
+    "hidden": false
+  },
+  {
+    "id": "geekpro-i7-14700f-4060ti-32g-1tb",
+    "name": "GeekPro i7-14700F 4060Ti 32G 1TB",
+    "brand": "Lenovo",
+    "category": "电子",
+    "acquired": "2024-10-11",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 706,
+    "status": "in_use",
+    "period": "monthly",
+    "period_label": "每月",
+    "times": 2,
+    "uses_per_year": 24,
+    "use_label": "每月 2 次",
+    "tags": [
+      "娱乐"
+    ],
+    "note": "曾经用来玩模拟器和3A大作。",
+    "price": 6799.2,
+    "source": "京东自营",
+    "resale": null,
+    "net_cost": 6799.2,
+    "daily_cost": 9.6306,
+    "uses": 46.4219,
+    "cost_per_use": 146.4653,
+    "payback_date": "2034-02-01",
+    "hidden": false
+  },
+  {
+    "id": "h501-se-gsh509lf",
+    "name": "高速吹风机H501 SE 蓝色 (GSH509LF)",
+    "brand": "Xiaomi",
+    "category": "家电",
+    "acquired": "2024-10-05",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 712,
+    "status": "in_use",
+    "period": "weekly",
+    "period_label": "每周",
+    "times": 1,
+    "uses_per_year": 52,
+    "use_label": "每周",
+    "tags": [
+      "家居",
+      "日用"
+    ],
+    "note": "长发时必须用。",
+    "price": 152.15,
+    "source": "京东自营",
+    "resale": null,
+    "net_cost": 152.15,
+    "daily_cost": 0.2137,
+    "uses": 101.4356,
+    "cost_per_use": 1.5,
+    "payback_date": "2025-03-07",
+    "hidden": false
+  },
+  {
+    "id": "pcr-ltd2",
+    "name": "PCR LTD2",
+    "brand": "GIANT",
+    "category": "出行",
+    "acquired": "2024-09-23",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 724,
+    "status": "in_use",
+    "period": "weekly",
+    "period_label": "每周",
+    "times": 3,
+    "uses_per_year": 156,
+    "use_label": "每周 3 次",
+    "tags": [
+      "运动"
+    ],
+    "note": "还是慢了，到不了更远的远方。只是锻炼和交通工具。捷安特价格刺客+售后宰客一生黑。",
+    "price": 4998.0,
+    "source": "线下门店",
+    "resale": null,
+    "net_cost": 4998.0,
+    "daily_cost": 6.9033,
+    "uses": 309.4356,
+    "cost_per_use": 16.152,
+    "payback_date": "2038-05-31",
+    "hidden": false
+  },
+  {
+    "id": "wd-red-plus-4tb-wd40efpx",
+    "name": "WD Red Plus 4TB (WD40EFPX)",
+    "brand": "WD",
+    "category": "电子",
+    "acquired": "2024-08-28",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 750,
+    "status": "in_use",
+    "period": "weekly",
+    "period_label": "每周",
+    "times": 4,
+    "uses_per_year": 208,
+    "use_label": "每周 4 次",
+    "tags": [
+      "生活",
+      "生产力"
+    ],
+    "note": "重要数据（照片）的备份。",
+    "price": 799.0,
+    "source": "京东自营",
+    "resale": null,
+    "net_cost": 799.0,
+    "daily_cost": 1.0653,
+    "uses": 427.3973,
+    "cost_per_use": 1.8695,
+    "payback_date": "2025-10-02",
+    "hidden": false
+  },
+  {
+    "id": "12tb",
+    "name": "企业级氦气硬盘12TB",
+    "brand": "HGST",
+    "category": "电子",
+    "acquired": "2024-08-28",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 750,
+    "status": "in_use",
+    "period": "weekly",
+    "period_label": "每周",
+    "times": 4,
+    "uses_per_year": 208,
+    "use_label": "每周 4 次",
+    "tags": [
+      "生活",
+      "娱乐"
+    ],
+    "note": "次要数据的存储。",
+    "price": 517.0,
+    "source": "拼多多",
+    "resale": null,
+    "net_cost": 517.0,
+    "daily_cost": 0.6893,
+    "uses": 427.3973,
+    "cost_per_use": 1.2096,
+    "payback_date": "2025-05-14",
+    "hidden": false
+  },
+  {
+    "id": "sy-100",
+    "name": "SY-100",
+    "brand": "Comix",
+    "category": "电子",
+    "acquired": "2024-08-22",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 756,
+    "status": "in_use",
+    "period": "weekly",
+    "period_label": "每周",
+    "times": 4,
+    "uses_per_year": 208,
+    "use_label": "每周 4 次",
+    "tags": [
+      "生活",
+      "娱乐",
+      "生产力"
+    ],
+    "note": "20年关注的斯波图来的捡垃圾行为，稳定到现在。",
+    "price": 200.0,
+    "source": "闲鱼",
+    "resale": null,
+    "net_cost": 200.0,
+    "daily_cost": 0.2646,
+    "uses": 430.8164,
+    "cost_per_use": 0.4642,
+    "payback_date": "2024-11-30",
+    "hidden": false
+  },
+  {
+    "id": "3-bhr6097cn",
+    "name": "米家智能插座3 (BHR6097CN)",
+    "brand": "Xiaomi",
+    "category": "家电",
+    "acquired": "2024-08-10",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 768,
+    "status": "in_use",
+    "period": "daily",
+    "period_label": "每天",
+    "times": 1,
+    "uses_per_year": 365,
+    "use_label": "每天",
+    "tags": [
+      "家居"
+    ],
+    "note": "用于了解电器功率，现在接在NAS上了用于远程启动。",
+    "price": 59.0,
+    "source": "京东自营",
+    "resale": null,
+    "net_cost": 59.0,
+    "daily_cost": 0.0768,
+    "uses": 768.0,
+    "cost_per_use": 0.0768,
+    "payback_date": "2024-10-08",
+    "hidden": false
+  },
+  {
+    "id": "pro",
+    "name": "小爱音箱 Pro",
+    "brand": "Xiaomi",
+    "category": "电子",
+    "acquired": "2024-08-10",
+    "retired": "2025-03-16",
+    "retire_reason": "卖出",
+    "days_held": 219,
+    "status": "retired",
+    "period": "weekly",
+    "period_label": "每周",
+    "times": 4,
+    "uses_per_year": 208,
+    "use_label": "每周 4 次",
+    "tags": [
+      "音乐",
+      "家居",
+      "娱乐"
+    ],
+    "note": "蓝牙网关、语音控制、洗澡烹饪时听歌、烹饪时智能问答；折腾过GPT接入。",
+    "price": 256.0,
+    "source": "京东自营",
+    "resale": 220.0,
+    "net_cost": 36.0,
+    "daily_cost": 0.1644,
+    "uses": 124.8,
+    "cost_per_use": 0.2885,
+    "payback_date": "2024-08-28",
+    "hidden": false
+  },
+  {
+    "id": "ih",
+    "name": "米家智能IH多功能料理锅",
+    "brand": "Xiaomi",
+    "category": "厨具",
+    "acquired": "2024-08-08",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 770,
+    "status": "in_use",
+    "period": "weekly",
+    "period_label": "每周",
+    "times": 4,
+    "uses_per_year": 208,
+    "use_label": "每周 4 次",
+    "tags": [
+      "烹饪",
+      "家居"
+    ],
+    "note": "什么菜都能做。",
+    "price": 597.0,
+    "source": "京东自营",
+    "resale": null,
+    "net_cost": 597.0,
+    "daily_cost": 0.7753,
+    "uses": 438.7945,
+    "cost_per_use": 1.3605,
+    "payback_date": "2026-03-28",
+    "hidden": false
+  },
+  {
+    "id": "pro-2",
+    "name": "米家电子温湿度计Pro",
+    "brand": "Xiaomi",
+    "category": "家电",
+    "acquired": "2024-08-05",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 773,
+    "status": "in_use",
+    "period": "daily",
+    "period_label": "每天",
+    "times": 1,
+    "uses_per_year": 365,
+    "use_label": "每天",
+    "tags": [
+      "家居"
+    ],
+    "note": "看时间；给格力空调的卧室来感知温度。",
+    "price": 69.99,
+    "source": "京东",
+    "resale": null,
+    "net_cost": 69.99,
+    "daily_cost": 0.0905,
+    "uses": 773.0,
+    "cost_per_use": 0.0905,
+    "payback_date": "2024-10-14",
+    "hidden": false
+  },
+  {
+    "id": "a1642-10000mah",
+    "name": "磁吸充电宝 A1642 10000mAh",
+    "brand": "ANKER",
+    "category": "电子",
+    "acquired": "2024-06-08",
+    "retired": "2025-08-08",
+    "retire_reason": "消耗殆尽",
+    "days_held": 427,
+    "status": "retired",
+    "period": "weekly",
+    "period_label": "每周",
+    "times": 2,
+    "uses_per_year": 104,
+    "use_label": "每周 2 次",
+    "tags": [
+      "旅行"
+    ],
+    "note": "被召回了。",
+    "price": 109.0,
+    "source": "京东自营",
+    "resale": 109.0,
+    "net_cost": 0.0,
+    "daily_cost": 0.0,
+    "uses": 121.6658,
+    "cost_per_use": 0.0,
+    "payback_date": "2024-06-08",
+    "hidden": false
+  },
+  {
+    "id": "mt3-41",
+    "name": "MT3 越野跑步鞋 灰色 41",
+    "brand": "DECATHLON",
+    "category": "鞋履",
+    "acquired": "2024-06-08",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 831,
+    "status": "in_use",
+    "period": "monthly",
+    "period_label": "每月",
+    "times": 1,
+    "uses_per_year": 12,
+    "use_label": "每月",
+    "tags": [
+      "旅行",
+      "运动"
+    ],
+    "note": "真的只适合越野跑，长时间穿不舒服，放旅行箱里占体积。",
+    "price": 559.8,
+    "source": "线下门店",
+    "resale": null,
+    "net_cost": 559.8,
+    "daily_cost": 0.6736,
+    "uses": 27.3205,
+    "cost_per_use": 20.4901,
+    "payback_date": "2025-12-20",
+    "hidden": false
+  },
+  {
+    "id": "forerunner-255",
+    "name": "Forerunner 255 神秘灰",
+    "brand": "GARMIN",
+    "category": "电子",
+    "acquired": "2024-05-10",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 860,
+    "status": "in_use",
+    "period": "daily",
+    "period_label": "每天",
+    "times": 1,
+    "uses_per_year": 365,
+    "use_label": "每天",
+    "tags": [
+      "运动",
+      "生产力"
+    ],
+    "note": "替换早已损坏的华为GT2；可惜之后跑步就不多了。",
+    "price": 1776.0,
+    "source": "京东",
+    "resale": null,
+    "net_cost": 1776.0,
+    "daily_cost": 2.0651,
+    "uses": 860.0,
+    "cost_per_use": 2.0651,
+    "payback_date": "2026-10-15",
+    "hidden": false
+  },
+  {
+    "id": "pico-4-a8110-8-128g",
+    "name": "PICO 4 (A8110) 8+128G",
+    "brand": "PICO",
+    "category": "电子",
+    "acquired": "2024-04-26",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 874,
+    "status": "in_use",
+    "period": "weekly",
+    "period_label": "每周",
+    "times": 1,
+    "uses_per_year": 52,
+    "use_label": "每周",
+    "tags": [
+      "娱乐"
+    ],
+    "note": "打拳。",
+    "price": 2399.0,
+    "source": "京东自营",
+    "resale": null,
+    "net_cost": 2399.0,
+    "daily_cost": 2.7449,
+    "uses": 124.5151,
+    "cost_per_use": 19.2667,
+    "payback_date": "2027-08-09",
+    "hidden": false
+  },
+  {
+    "id": "1s",
+    "name": "米家智能显示器屏幕挂灯1S",
+    "brand": "Xiaomi",
+    "category": "家电",
+    "acquired": "2024-04-17",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 883,
+    "status": "in_use",
+    "period": "weekly",
+    "period_label": "每周",
+    "times": 2,
+    "uses_per_year": 104,
+    "use_label": "每周 2 次",
+    "tags": [
+      "阅读",
+      "娱乐",
+      "家居"
+    ],
+    "note": null,
+    "price": 207.5,
+    "source": "京东自营",
+    "resale": null,
+    "net_cost": 207.5,
+    "daily_cost": 0.235,
+    "uses": 251.5945,
+    "cost_per_use": 0.8247,
+    "payback_date": "2024-11-11",
+    "hidden": false
+  },
+  {
+    "id": "m230",
+    "name": "M230 高品质复古蓝牙便携音箱 绿魔黑",
+    "brand": "EDIFIER",
+    "category": "电子",
+    "acquired": "2024-01-03",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 988,
+    "status": "in_use",
+    "period": "weekly",
+    "period_label": "每周",
+    "times": 3,
+    "uses_per_year": 156,
+    "use_label": "每周 3 次",
+    "tags": [
+      "音乐",
+      "娱乐",
+      "生活"
+    ],
+    "note": "电池已经坏了，必须插电使用。",
+    "price": 271.0,
+    "source": "京东自营",
+    "resale": null,
+    "net_cost": 271.0,
+    "daily_cost": 0.2743,
+    "uses": 422.2685,
+    "cost_per_use": 0.6418,
+    "payback_date": "2024-05-18",
+    "hidden": false
+  },
+  {
+    "id": "4a",
+    "name": "小米路由器4A 千兆版",
+    "brand": "Xiaomi",
+    "category": "电子",
+    "acquired": "2023-11-27",
+    "retired": "2025-06-13",
+    "retire_reason": "闲置",
+    "days_held": 565,
+    "status": "retired",
+    "period": "daily",
+    "period_label": "每天",
+    "times": 1,
+    "uses_per_year": 365,
+    "use_label": "每天",
+    "tags": [
+      "网络设备"
+    ],
+    "note": null,
+    "price": 99.0,
+    "source": "京东自营",
+    "resale": null,
+    "net_cost": 99.0,
+    "daily_cost": 0.1752,
+    "uses": 565.0,
+    "cost_per_use": 0.1752,
+    "payback_date": "2024-01-16",
+    "hidden": false
+  },
+  {
+    "id": "redmi-27-4k-hdr400-type-c",
+    "name": "Redmi显示器 27英寸/4K/HDR400/Type-C",
+    "brand": "Xiaomi",
+    "category": "电子",
+    "acquired": "2023-11-25",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 1027,
+    "status": "in_use",
+    "period": "weekly",
+    "period_label": "每周",
+    "times": 2,
+    "uses_per_year": 104,
+    "use_label": "每周 2 次",
+    "tags": [
+      "生产力",
+      "娱乐"
+    ],
+    "note": "mbp屏幕损坏后的必需品，4K 27英寸 质的飞跃，最终还是闲置了。",
+    "price": 1599.0,
+    "source": "京东自营",
+    "resale": null,
+    "net_cost": 1599.0,
+    "daily_cost": 1.557,
+    "uses": 292.6247,
+    "cost_per_use": 5.4643,
+    "payback_date": "2026-02-02",
+    "hidden": false
+  },
+  {
+    "id": "k3pro-a3",
+    "name": "K3Pro-A3 白光茶轴",
+    "brand": "Keychron",
+    "category": "电子",
+    "acquired": "2023-11-12",
+    "retired": "2026-05-30",
+    "retire_reason": "损坏",
+    "days_held": 931,
+    "status": "retired",
+    "period": "daily",
+    "period_label": "每天",
+    "times": 1,
+    "uses_per_year": 365,
+    "use_label": "每天",
+    "tags": [
+      "生产力"
+    ],
+    "note": "键帽磨平了两套，也算是重度使用了，电路短路问题没法继续用。",
+    "price": 378.0,
+    "source": "京东",
+    "resale": null,
+    "net_cost": 378.0,
+    "daily_cost": 0.406,
+    "uses": 931.0,
+    "cost_per_use": 0.406,
+    "payback_date": "2024-05-19",
+    "hidden": false
+  },
+  {
+    "id": "iphone-14-pro-a2892-256gb",
+    "name": "iPhone 14 Pro (A2892) 256GB 深空黑",
+    "brand": "Apple",
+    "category": "电子",
+    "acquired": "2023-04-26",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 1240,
+    "status": "in_use",
+    "period": "daily",
+    "period_label": "每天",
+    "times": 1,
+    "uses_per_year": 365,
+    "use_label": "每天",
+    "tags": [
+      "生产力"
+    ],
+    "note": "外屏上侧莫名其妙压碎。现在只用来做通讯/拍摄/金融支付。",
+    "price": 7169.0,
+    "source": "京东",
+    "resale": null,
+    "net_cost": 7169.0,
+    "daily_cost": 5.7815,
+    "uses": 1240.0,
+    "cost_per_use": 5.7815,
+    "payback_date": "2033-02-17",
+    "hidden": false
+  },
+  {
+    "id": "nm-256g-ncard",
+    "name": "NM存储卡 256G nCARD",
+    "brand": "Lexar",
+    "category": "电子",
+    "acquired": "2022-07-07",
+    "retired": "2023-04-22",
+    "retire_reason": "闲置",
+    "days_held": 290,
+    "status": "retired",
+    "period": "daily",
+    "period_label": "每天",
+    "times": 1,
+    "uses_per_year": 365,
+    "use_label": "每天",
+    "tags": [
+      "生产力"
+    ],
+    "note": "为了给mate20存储容量续命。华为沾边的真正废物。",
+    "price": 297.38,
+    "source": "京东自营",
+    "resale": 100.0,
+    "net_cost": 197.38,
+    "daily_cost": 0.6806,
+    "uses": 290.0,
+    "cost_per_use": 0.6806,
+    "payback_date": "2022-10-14",
+    "hidden": false
+  },
+  {
+    "id": "s100",
+    "name": "米家电动剃须刀 S100",
+    "brand": "Xiaomi",
+    "category": "家电",
+    "acquired": "2022-03-12",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 1650,
+    "status": "in_use",
+    "period": "weekly",
+    "period_label": "每周",
+    "times": 4,
+    "uses_per_year": 208,
+    "use_label": "每周 4 次",
+    "tags": [
+      "生活",
+      "日用"
+    ],
+    "note": null,
+    "price": 70.0,
+    "source": "京东自营",
+    "resale": null,
+    "net_cost": 70.0,
+    "daily_cost": 0.0424,
+    "uses": 940.274,
+    "cost_per_use": 0.0744,
+    "payback_date": "2022-05-21",
+    "hidden": false
+  },
+  {
+    "id": "aeropex-as800",
+    "name": "Aeropex AS800 环法特别版",
+    "brand": "AfterShokz",
+    "category": "电子",
+    "acquired": "2021-11-05",
+    "retired": "2026-09-12",
+    "retire_reason": "损坏",
+    "days_held": 1773,
+    "status": "retired",
+    "period": "weekly",
+    "period_label": "每周",
+    "times": 4,
+    "uses_per_year": 208,
+    "use_label": "每周 4 次",
+    "tags": [
+      "音乐",
+      "运动",
+      "旅行",
+      "通勤"
+    ],
+    "note": "开机键触点物理失灵。服役期内几乎每天戴着工作、导航或运动。韶音只提供加价换新不提供维修，吃相难看。",
+    "price": 1030.0,
+    "source": "京东自营",
+    "resale": null,
+    "net_cost": 1030.0,
+    "daily_cost": 0.5809,
+    "uses": 1010.3671,
+    "cost_per_use": 1.0194,
+    "payback_date": "2023-04-04",
+    "hidden": false
+  },
+  {
+    "id": "watch-gt2-pro-06b",
+    "name": "WATCH GT2 Pro-06B",
+    "brand": "HUAWEI",
+    "category": "电子",
+    "acquired": "2021-07-15",
+    "retired": "2024-05-10",
+    "retire_reason": "损坏",
+    "days_held": 1031,
+    "status": "retired",
+    "period": "daily",
+    "period_label": "每天",
+    "times": 1,
+    "uses_per_year": 365,
+    "use_label": "每天",
+    "tags": [
+      "运动",
+      "生活"
+    ],
+    "note": "过保4个月2022-11-22物理按键（开机键）就坏了，华为生态呵呵呵；一直坚持着用，一年后还用来跑全马。",
+    "price": 2188.0,
+    "source": "线下门店",
+    "resale": null,
+    "net_cost": 2188.0,
+    "daily_cost": 2.1222,
+    "uses": 1031.0,
+    "cost_per_use": 2.1222,
+    "payback_date": "2024-07-13",
+    "hidden": false
+  },
+  {
+    "id": "macbook-pro-13-8gb-256gb",
+    "name": "MacBook Pro 13″深空灰 8GB 256GB",
+    "brand": "Apple",
+    "category": "电子",
+    "acquired": "2021-03-15",
+    "retired": "2026-05-31",
+    "retire_reason": "闲置",
+    "days_held": 1904,
+    "status": "retired",
+    "period": "daily",
+    "period_label": "每天",
+    "times": 1,
+    "uses_per_year": 365,
+    "use_label": "每天",
+    "tags": [
+      "生产力",
+      "生活"
+    ],
+    "note": "划时代的芯片；2023年8月屏幕碎了。外接显示器用过，丐版内存已经落后于时代了。",
+    "price": 9199.0,
+    "source": "Apple Store",
+    "resale": null,
+    "net_cost": 9199.0,
+    "daily_cost": 4.8314,
+    "uses": 1904.0,
+    "cost_per_use": 4.8314,
+    "payback_date": "2033-10-18",
+    "hidden": false
+  },
+  {
+    "id": "freebuds-pro",
+    "name": "FreeBuds Pro 碳晶黑丨有线充版",
+    "brand": "HUAWEI",
+    "category": "电子",
+    "acquired": "2020-11-01",
+    "retired": "2024-11-14",
+    "retire_reason": "闲置",
+    "days_held": 1475,
+    "status": "retired",
+    "period": "weekly",
+    "period_label": "每周",
+    "times": 3,
+    "uses_per_year": 156,
+    "use_label": "每周 3 次",
+    "tags": [
+      "音乐"
+    ],
+    "note": "2022-01-15 出现一只耳朵降噪坏音量超小。所有的华为产品都被设计成过保就损坏。",
+    "price": 977.0,
+    "source": "京东自营",
+    "resale": null,
+    "net_cost": 977.0,
+    "daily_cost": 0.6624,
+    "uses": 630.411,
+    "cost_per_use": 1.5498,
+    "payback_date": "2022-03-05",
+    "hidden": false
+  },
+  {
+    "id": "sn750-nvme-ssd-1tb",
+    "name": "SN750 NVMe SSD 1TB",
+    "brand": "WD",
+    "category": "电子",
+    "acquired": "2020-07-31",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 2239,
+    "status": "in_use",
+    "period": "weekly",
+    "period_label": "每周",
+    "times": 1,
+    "uses_per_year": 52,
+    "use_label": "每周",
+    "tags": [
+      "生产力"
+    ],
+    "note": null,
+    "price": 950.0,
+    "source": "闲鱼",
+    "resale": null,
+    "net_cost": 950.0,
+    "daily_cost": 0.4243,
+    "uses": 318.9808,
+    "cost_per_use": 2.9782,
+    "payback_date": "2021-11-18",
+    "hidden": false
+  },
+  {
+    "id": "ddr4-2400-16gb-pc3lpc4",
+    "name": "内存条 DDR4 2400 16GB (PC3LPC4)",
+    "brand": "SAMSUNG",
+    "category": "电子",
+    "acquired": "2020-03-08",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 2384,
+    "status": "in_use",
+    "period": "weekly",
+    "period_label": "每周",
+    "times": 1,
+    "uses_per_year": 52,
+    "use_label": "每周",
+    "tags": [
+      "生产力"
+    ],
+    "note": null,
+    "price": 547.99,
+    "source": "京东",
+    "resale": null,
+    "net_cost": 547.99,
+    "daily_cost": 0.2299,
+    "uses": 339.6384,
+    "cost_per_use": 1.6135,
+    "payback_date": "2020-12-07",
+    "hidden": false
+  },
+  {
+    "id": "nm520-nvme-ssd-512gb",
+    "name": "NM520 NVMe SSD 512GB",
+    "brand": "Lexar",
+    "category": "电子",
+    "acquired": "2020-03-06",
+    "retired": "2020-08-02",
+    "retire_reason": "卖出",
+    "days_held": 150,
+    "status": "retired",
+    "period": "weekly",
+    "period_label": "每周",
+    "times": 5,
+    "uses_per_year": 260,
+    "use_label": "每周 5 次",
+    "tags": [
+      "生产力"
+    ],
+    "note": null,
+    "price": 559.0,
+    "source": "京东",
+    "resale": 350.0,
+    "net_cost": 209.0,
+    "daily_cost": 1.3933,
+    "uses": 106.8493,
+    "cost_per_use": 1.956,
+    "payback_date": "2020-06-19",
+    "hidden": false
+  },
+  {
+    "id": "ipad-air-3-64gb",
+    "name": "iPad Air 3 - 64GB 银色",
+    "brand": "Apple",
+    "category": "电子",
+    "acquired": "2019-08-27",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 2578,
+    "status": "in_use",
+    "period": "weekly",
+    "period_label": "每周",
+    "times": 4,
+    "uses_per_year": 208,
+    "use_label": "每周 4 次",
+    "tags": [
+      "生产力",
+      "学习"
+    ],
+    "note": "上课slides做笔记/写作业用；还在疫情期间用来考试；至今仍可以当作副屏；重量全在电池上了电池很能扛。",
+    "price": 3701.0,
+    "source": "Apple Store",
+    "resale": null,
+    "net_cost": 3701.0,
+    "daily_cost": 1.4356,
+    "uses": 1469.1068,
+    "cost_per_use": 2.5192,
+    "payback_date": "2024-09-20",
+    "hidden": false
+  },
+  {
+    "id": "mate-20-hma-al00-6gb-128gb",
+    "name": "Mate 20 (HMA-AL00) 6GB+128GB 翡冷翠",
+    "brand": "HUAWEI",
+    "category": "电子",
+    "acquired": "2019-08-27",
+    "retired": "2023-04-22",
+    "retire_reason": "损坏",
+    "days_held": 1335,
+    "status": "retired",
+    "period": "daily",
+    "period_label": "每天",
+    "times": 1,
+    "uses_per_year": 365,
+    "use_label": "每天",
+    "tags": [
+      "生产力"
+    ],
+    "note": "修过一次外屏；主板烧坏直接丢数据。",
+    "price": 3693.0,
+    "source": "京东自营",
+    "resale": null,
+    "net_cost": 3693.0,
+    "daily_cost": 2.7663,
+    "uses": 1335.0,
+    "cost_per_use": 2.7663,
+    "payback_date": "2024-09-16",
+    "hidden": false
+  },
+  {
+    "id": "t480s-20l7002lcd-8gb-256gb",
+    "name": "T480s (20L7002LCD) 8GB 256GB",
+    "brand": "ThinkPad",
+    "category": "电子",
+    "acquired": "2018-08-03",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 2967,
+    "status": "in_use",
+    "period": "daily",
+    "period_label": "每天",
+    "times": 1,
+    "uses_per_year": 365,
+    "use_label": "每天",
+    "tags": [
+      "生产力",
+      "生活"
+    ],
+    "note": "神中神，20年春扩展了16G内存/1TB西数黑盘/512G雷克沙；装过黑苹果（换BCM94352Z网卡）和Manjaro；带去过拉萨。CPU太弱，MBP2020M1之后淘汰；现在装了fnOS，开满docker天天用。",
+    "price": 9299.0,
+    "source": "天猫",
+    "resale": null,
+    "net_cost": 9299.0,
+    "daily_cost": 3.1341,
+    "uses": 2967.0,
+    "cost_per_use": 3.1341,
+    "payback_date": "2031-04-27",
+    "hidden": false
+  },
+  {
+    "id": "kindle-paperwhite-3",
+    "name": "Kindle Paperwhite 3",
+    "brand": "Amazon",
+    "category": "电子",
+    "acquired": "2017-09-24",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 3280,
+    "status": "in_use",
+    "period": "yearly",
+    "period_label": "每年",
+    "times": 20,
+    "uses_per_year": 20,
+    "use_label": "每年 20 次",
+    "tags": [
+      "阅读",
+      "学习"
+    ],
+    "note": "高三大一和地铁飞机里重度使用。找不到纸质书时能解燃眉之急，多数时间吃灰。",
+    "price": 999.0,
+    "source": "天猫",
+    "resale": null,
+    "net_cost": 999.0,
+    "daily_cost": 0.3046,
+    "uses": 179.726,
+    "cost_per_use": 5.5585,
+    "payback_date": "2019-02-06",
+    "hidden": false
+  },
+  {
+    "id": "dsc-rx100m3",
+    "name": "DSC-RX100M3",
+    "brand": "SONY",
+    "category": "电子",
+    "acquired": "2015-06-09",
+    "retired": null,
+    "retire_reason": null,
+    "days_held": 4118,
+    "status": "in_use",
+    "period": "yearly",
+    "period_label": "每年",
+    "times": 20,
+    "uses_per_year": 20,
+    "use_label": "每年 20 次",
+    "tags": [
+      "摄影",
+      "生活",
+      "旅行"
+    ],
+    "note": "揣进口袋的卡片机，至今仍然能和手机拍摄掰掰手腕；取景器应对强光，轻装旅行用。",
+    "price": 4310.0,
+    "source": "淘宝",
+    "resale": null,
+    "net_cost": 4310.0,
+    "daily_cost": 1.0466,
+    "uses": 225.6438,
+    "cost_per_use": 19.1009,
+    "payback_date": "2021-05-03",
+    "hidden": false
+  }
+];
+
+const GEAR_SECRET = {
+  "salt": "ki6my6dVRX8Mqudy8PYqTw==",
+  "iv": "usq3EK2tIRQmnpQH",
+  "ciphertext": "i/wcknOxMGjIRD6y43AkT/NeojF4WlpL8p3rUzors8k9BUB/Xdmw08JL4FNDBuZ4ISCNOtlp9WfPksWgO+PMVpysQeMFJ20OYOvM+BAOMHhR3u7pmOqh0aV5A/U+/OuZZVQlWunaPXR8Q+nLQHr6b4n1MeO99u8CsLWRiXLvbMwjbnlx75qecrOUXnXngT11r22FVBL/xS6j5rxzm2ir7IXkZXXax6Su1shktB+BMhmyKs7jnAFVO5LKpJo6P4DuHBbS6ODY6/96VkWHa6LS3X0KTSFqQvA8BvnUZnNfBkJy5GCfTm0/ZN1FRpY2JM3EusWpJes8Uh9f7dTbUxworjYfkKKzZf3FiqQsuZuY3WhtnoDSDNIepuX98/tMG4+HWWqwevJYt8UnJQRG+azG6csN/HjHez0sKg29GNd//GG3Dl2gF5Bh9sR4Afb2DamJ+ZGPJozeJiIO/EZ0FVZQvJRFDuYJMl4IgSJuBpW9UilyqhOemfZYifE/7RcG+VhSy74Dpwj1Ilorf1v5fO0oq0nlq99hkQu+m962G18v5DRj+Ske38KLJbrZcNiiUQPqgMxafsgV0FI9Dgk3q3G0MzKF+EPlGien7mfE0CGlri7giVzViSLYIOm9cXBT0VkIgd19P0JbZ5tC10YkdLqomk6OCUUlkBgVhoQzIVP6FSbcfr+X6FdHP+KPvE15lnZYajZvc+V8wXZxGwGACQY0f2OeEHWEhmZMyQZ3Jp8z19JCmNiHVG33iKxRHzmiqKe6ex7/GELjaZqhcIdjAKFLF5HwSUrzn+IMAhX1PwQTADpKlcWN31lMvWX4G/SrNZwD2DR3iA0KV4+14kQsMV17Vtio+mrDsv7L46pvGqD8/DMMW4ZQzp4czDi7FlqyrhJVZBoJW9zMrrrNpXsYxX4RQrXHqWViS/iSjAbus00tD/HBkIlqeWWs4xKQ7J93lgEEuiWYiqhq5InTwyswUY2l4/MPJ72z8Id8tUu/VuTfguZx79y2DIkABryNs985p0N5KkVktrhT4ZaMe3b91ejtem7faeUGm5emy1HeoiXYV0OH/XDfcPWBVo/ztTtTvkwTPsnOm3i4ctdjcdAd8UOQXfmM1gfpDPm2YIH/dXZu7sXb29/d0vkOInV4RI8Qrrxp+3C3HeTrE3HX/RImkJvmBHOBqI3tGQz2aQi9zgmZZHZ7t++keo3c/DJmnMPAmfU9DvLeqTk4ABVQjA378L+1+JR1mC1i8jBVND4WnDipOscltJf6qovp1SAdqpz2+j5WNAB0UxGL5wwov+6RQLS0c960Ikez4S8/YS6D7D7AZaQDQAgiDs4kKgfogyFKF1CWS7/WZ6hs6LBSbTEwVX5FKVhRxotubfch5v4YaMzFKt/dpGOrJfI32al1z9KvcEexxlttWY2NrZvOo2+iEQ//YFuHxOPZGoNScmSO6wOHY0pVE5Lr9cI30otShz6sxciS2d+AyVAbS6Fu5bj5YwSuL1U6okgm2b8LTM4l9KPxbIWNd93wGxrhqMU6mG3WNBz2y13j9apQ7tBUCtQTLHisARPpCFkUfzY7nsGd0NQDeiD2qxkl1JxvYPQCnCi0VKhdd7rKGwmynJae+Veh5bXDFQAF6oaNe1372cjYbgoYASBYvNoqbbljUdZx2hsaqqC+81RF6Mj5BCe97ejr1qlmVnrWSiP8WO3TrFItK6Qzbnk5GfnD14BmMk5WhjdOQb4ZuB9pOo3jj8NjDhrgcC/ZD24Xggpxu0+v2vD4NoYKSAGB1G2iiYzEVEHvOEYe67+wk0ISFSHVR6Y7LTU9KflPDfCuBW3B+KR/rr90pfA1C2T3Bq7Rd8v45rDiIHR8ezrvKl9d1s+NMoO7b8DUf4Sh198ij6E4f24NWQUh8pGcwPchLa9NhDkDNxd9DHKHBHe+YIql7tkOjDhsL4AayCitmvlMccV4KRYO7QuIqj980kB2oLTZVFtDX12rOzFtZK2ow7ZIkS7WfP2MVGb4NXVcVtF1tGWtDSg4WNQZHHOHlmrRa6cgaKFc8rIbds5ONL755MV47PmNmhBuMweL9UXgB1SSNb9PDp+XEspFBt/bLUgMl77eOi3UN7vJgKQ3W8JAFOHxuamygVkngKJCrcJ6pDB9Gu5ETFPYp4on2uA6Z84M1sNOq9rwNW0BXQLY3vXSTv8lseD+rp/ufYEy2PbX+aNmBj38XwO6KWrn8zMnXujg89dU0p2ZvCXTXC++kTbnPo0a+kikdA+XP1D/YJUjyku4pOjYcQOJZxN6w9PiiXbEf53VbWJvs29SPDWcTf0NDYg8B8o1up3oPcM+I40E0wM3kna1wKoZH5zpNOqwzjk1FFQGvAkif4+asVgs1zwv22ofYU0bl01B2V5At+aRtvVHj6iTovuiC3YG/nGHHL8Fo7X/xzOyGUzqo1r8KBMmGyT/lltI1U3cixP8R/jCddEfpO7y9p9TzvpaEnSs2hOC+RKu7PWMifWRXZCvMHCBEd9zsYYCcgas3saDkfutRQSmu4muicJAiX+zt8zU998oX8K0/IuGe4bVgqtS29dCDYJxBQIvPsLq+xBwJwAAf4R0mxu4wBm3hMHNbh6eHsTa3EOQM2wFRPwxIETjhROYNJjbZwpnNlNFi9HtYKB9hkvGe2Z65N6yo1XFSBoU+wJWGlThK9H1vhq56Z3NiNkFVgKL86/CL+8JZcRzApJU4HvUbnizVZB2CJYtzY8dwakG0XTRdZGUAyeFgTSvVq+FfDQqNlbAyELJQWubi7BxUZSXZt3aF+HebEl53Pp0BWL7ocEcO9MGH1d0HoIILBiZhTGw0uYRMijFJ/q63SiSRXk1Nc17alqkQKBvFAd5ezpRNIgQg/EQ78pqViIfSZCqcdYQxjpJNm9nA1j6i/w1Ub//txnXpvdzicG/qcET8O7Xn5+i57dy/QgSUAwKDP725alAS3EC+/SuMr86WlfSNNhBxKrj3PDNlKGF2UxI2xr2fFDLNYImbBrtPo5kdxX1edTr70UVe0LCIzDXoqxhOIe/Fl+CMXnfn0qsKkdGLKyPUz7wtrK9T16LEXQRFrjnqRMk4qoK0ZLt7uxtsklECRo53GA0MM9ERFHuE4cMC87Y2pYJ+NCvG4gCjRdJE7knvp4YAYhLRwyp1vtm0cCfWnuyaSZsYed9mkpmX7Uw/QrS8stFOzp4oXwHT+KmVBpXim73RZvdFr5wyMiaYrarl7o9YHdSbM617UigO+h2tcHmeCq+PVRw8PsYlJHlv+50LhhBxjrdxeqVb3Xgdmyry1xM9CNzlBIxiVBJJGtDy9gih0UCJo2nFZFv81yr2TX2iLN00epae7XMzuluIBhjQwn4fSBOt+W/EIzWwSIFLGqPvewcwKmc3QTwZY7Te/ZINbg7eDynU35tszKx6t64C5HaW5nHPk6bpsYyCszi+T2FP9ykFhgsVa64gpRqi7dgw91Cgv+3NanjdOuthq3dSDNmEGv92PmSptiG4nSw9B+bV4IeD6KnQ0p7aUETvdq4Un+3VFhUogl8MTl+jWaF6FlslGa0OJQkgqEPQ+06yTBvBAWPsa8UoWODl2kHqMi5JxBd3o86HA5CTpi0uFJCFgbl/YPYJp/E/iyUvlCltGdkZiciqIhwMJDs1WPSxnueybO/DjPgQNdXmCYJOcKrBbyG7ptNygP1sJQTjhqCVUAs2Hu7bSQABZqj4P6QZI5sXkQcnHKMaKHWCZHsygwdFZurQri4RcHQnyrBk21NOiHaQa1KY5HPuygic7BrunjV7qD8wN5qo033xhT4fQUTttJ5b3ZHiHcW2BiOk1grHGp5W82BJ4G6LYBILoBnOVhEpnsHqeg3OV8qGdghgYKtz/ziohsCz+bKL6higkTeIvjd/+iPrzylhlRz6mblDIdKZbTJhPB/HeC7H9o+z6CrVQglMeWIy6HccaPh2t+1Rxdv9uixUW0V//zS/gLkze6l0f04LEhZVQVodfHXaLO0RY7rm2Cw+7ooCEQxOc5lejXNLlPA9HKnlVcEyTXfbjytxKUETyvxg8yclRdC5ysw+KrTPWVgh9am8sPqppE6fbssaJR+qC169BQHNkozXmcrOIDnfJrk++UftECakhEGS8C0hH9eEtJdOTF5Su6rRqx2PbvwCwZAgW9/CZhj66QpFZvCLXAmN5a7FEibiUEiVCL20zJJJkrXXwAl5aZItXFsCbyEPhBfe40n/BupqOYb90H+ZvCDMTwXZPnTZfzdIkv0KVeJWi0upwZ1Xvcq+M1DKTqJCOSHQRFjT5WQvUroJQ+K9E2mS9KS1o+as2YpG98O3CIhoYBVymyeTvGUt2f+unfrdtmj3GZNncWXauPlVxwwUQLlSQiEjTWTZwPiNLLhLqAxpB1lNAr3M9MpSGZdiD4bKcSM1pXUm87beP29kDcPj4oYeU15/AMrcz6rtSPryXrNYG7i5n7DlvlIp8jz/jXaH+PtVGlaXEjgSvLVMeRPVGS3R0rFcIE3IRZaV3sAnuibEWkPUARRnn4HLo7hFANWO7pFiPsyFeXo0nzSnoWdWAKRMlvyyvMlMwZwdbhNaa49oxfcG0PH2AVNgoeqHiGqARwkmcEvKCnjmathhkt8k2YXwjbXcFJiDneHVcjEa8hSLs4p+rSr8n6zsGYH45eLyCRD6ET/j22Wwj5iwbnhe3IouPn2XSc9OS4C4gmttDcFwdUPBwrDVnhCt8ay3OI5wMdHqrVUhrbcI/e7KqTp3QHNdaKTVN9fqtgU9j72ktUpxFj9Qg+kafirSvPGSigWq/ybdtWsfO7GQNrTLsVtOoIZKFQV2SKV8wi7SG8h0GemVcxKLq32zZdidZB4Z4h1x9HKhL6pDs55DgAF6E6ad31d9h0qoSet3TjjkGgTxHB1QD37ISTyrg1hemCEBhDKw4WXRRCTm26vLYp2DAWwM0PMGVPsDV/C+e+B5GjUKa3P/abZKuZFxsJTWejznxdkPSE6mOrw78vdYny+/4qZdpS0PfRGTFD1pUt+bcwR176/0N0hoykfp3ThFxlu8xi6kCX0Q0/bttPcQfcmVPttKr+r0Wx7LuYRs5fMnFjF6kt/SiWMLDtI+a9nfDb5TgTmOcTzTzZrgc06fy+eCfmrC7ZSkXnOHdi2a6eIEbnxkuuL10hpGHhQNgkOYvuOB0mCMfGBIU2i53iCKDnZLkkLHN4OKYYml7W4yNVBrztNevYPa7kgdO8WMY+bi+rpA4ZAP6vdhjMrMNaTmrNeKj9KWHk85ACJAiOpe6BW7X1kQ4nfbtH9NKW8+bofYb47Sju62r/G868AUJzZgxXwyMuLtbensr0h0bIMHknIOlv/jjJ32NGbOcZvep/qYDnDVwDDrLEVepk6P3Zjd0CCQxANTYsfemXA8zBVXV8tB4PR5nKgfoFljjt6mGk4DdZgy5sRnqGo+kTki5e0MuRu0xEVupiAdUGcWfJuAEeDG0c3ulH0EGEHp7DgwZVp5joPJEETm/GWXZm7I2OvSPDDGZgOt93TO7tnlevQnhyb74vXNJGEu1U5Xe29WhzlueT4tbCl+5UD4aK+uQLSGqx5yRdZRFFaBbfig6nXrip2FbDPfdzyH8XCzQZ4+nLsj43ALQqU63tn4gaPR5YFIuWpYNtHzjTCCYim0j0G/1pmItWWRAuX4Hzu67rVIrb6nvbm6cgnAyUUhJt4CfdSL0n+4jYibQZEDnAQ0FrZuuAY2ux5sKHyu5p4JKu7xmFsHnTfF4LLRmyyvJdnl315PpwhVFlKs+VaadPVrdDLi1JNviQf8JupPRtKMZc3VWA5UM8rsYntojJtRliXw9XSszzyAQ3kZ0mIZnAu84n/Nd8KgYWoQtb5PDB5ImRcR/rQBuZGZmkJqa619FC4ohanbCvsQWK8OOs2+jtC0M75421VhE+tNyA6mOfHdU8PPtDWBdLvfrSf9DelMSCSAPV0plFS/i7GozpuzNUeRWKIr7HVDnjkU8VCUPB/aWYdR/hhx0dnYOgWVqdO0umNPT5SWxQtIvzFK+A3WLigxC/vmD9N9Cz17yZ68v4zcIb71gs9UJU9aTHwlYOiBbGSwrJtNRgdxBcIoL/Wu3l2D+AUjPcbdG77pC85ESXnk16pZD9DsQobYhRApO45T41gS04XCyAwAERllibpn8rTbOn4wiOKQNmIep3OamgVn0lcs0EvgkALf1lT/4KW2nFCMR/AWtQcJVU/GKmd1X4o/PkrJvJJdtM9B+894+tROT+eSO8HPjC391owupfsx+BoBOZceEXlLFSzVhvt8CFeI/uQM0RTZ6w3GNWqmeWzPpen9f5Zi+9qyAvmh2V/kkK7FA6/yvKy8qbdJn2Nc5+JA8/6215i1tYLKA1vCKIk3cFUvdlg9ZqVXOnOUjZjR6IUovA24AN5uRPCVSvYirsxP224IRwHbhW/m5RjdqIOA+a+sgLckUJViuFKPQydhC/3t3xt7ZY7CtJepREDIofNw+VrAkMjHtrdu0gU/Gk/sx8DcXCfz8Rax1qNnHNe67eTv5kfMAXWwmuN0szeWWZ/wHNUmsiF5aTMaPaeq9aEs37IDWloWPTWRUcHMkl83a4kZPFHBT25cW4lG15Z0btd/6bTTdiUunHwSz1MViqxcfl5lH1Lo3j9HnDwYuB8KKFLQMMlUwIm8VRvbzWWju5LzjkzYII5IzHbOMRIlYN/7L2ZactYydEnEFzJaQtXLz8yH1fhPjeNEy8bpoN9qtUYFZTvtGhjaGeiOcD5lHVZvsbxsp5DCildWfaDEgLADX47fcs31h6zTf9kcfCsEgqNCKHOv59H7MAuWn3a9ydiBhz8mSRqQW8BejE6AT2D0qYg/n/gw+CpXQQ21C76gVLyYdW2VfeOztpGxgrMT4Wcz6tfZTaaYkFW/F26pBl8y0OQLS53km31XOnD9JuXwA6d8FIA88RZye+b1lU6iZ0VfvW3RAB/guhL1m8vKt1Jspd2lsdvH1mm3a2EH+sUIKYRARKe4PB2GGX6rKbQB0NZSkRRDRATbtlxo68/Yvyz6AS1me5PVIU4MQvYxlN/2UkmPJYwMK8tUyTTLW2ofSgG40ovkQXustfd1v+s5GUab+M2BcV+q49OTWdITN5J+dGtECdT228MTozYVqu8i1DjH3/ov3NeRs0WYka7JfR06GyKYTKLTnpp1K7finEVcovHewkD5APOI2UcJB1/LkUGHCQcIrtiVYTI+uYR+LEUIMiwHgPAkfmVi2k/NRFTbaVJqoYtzLAoGGHaEm/CyUPOtD+3UA9VZMLyHUwSx3cpcgfhAlbPty5fkodO0pd1lEEnid20p5AtOh2uH2Vkixhlum0Bzgnv3B8AGHtu0t0f5htjkH6MTdc7VpNJAWRZpXZ2m5nY7l/ekDCKVL1EqATx6srMzFbKghk3PfmE6BJuquWjBYqa4MmJTSb3ZrmkjZY5ErRX4zf3XqBno+CheZVfXa+W9dzFJiwr0Ek1An54voI0Oe7m88/G+fhqTHD6TUftCHWwpsKu6IokbeG6SCkvdcV5UjvxVG8ZWMbFjM5oNTKuHQuXr7K9fXc3qRIUnVDnuGaLC3WCYPSteVAyWr7Ct0ObMm/avXCf/vhogNWOFl1f1UWWn4sIRHbTexQOfWxTxUWa3XHRb2n80zkRbKYtrkMOFvSoQ0JulhZk65Bg9gG677XyWvpG0du19Xe8bYTpFuGE2GVV6ZciLWTGvcPZ5Uc2cToztaqjQ3Lll47U4zma/DZWnyN90MlfB14k9B9GY6xD9hlbW6dOHOxk3g0TH+o9Mpzt3hQTFZbOxDJSreKa3uGjdvE2R3W4/0UsYDhu9fgBLp5A4qT08YCx5TXuwkEeQRyya750o5j68w3J3shogJOHgxbeQLx7srKK3wQrP3VIVWA1AryAEUIgv8vhJUj3Yf9lJKG1aQX4ldfWlS9bGCpCLeRRyDPqek58mnp7psNJLrTUxfNRg6ExI5Si5NTh/Rp7yudzfsSX/I7bV4ghyhzyqViRMeZPXMnh3eu210hScOiWtjEFKsLpMSyNx9XW/3NfRCHtyHL+Cn1yG8fTEACVDb8dV2p6SssSimAV0Dxt8KabSqdw+FCGrfBdrLpiXQV1tTct3mVydL1V9sCGGp3+0oYWAUIbMj9l6aeLW3FUVuXtV8nofpLjjzvkDpLDmm9J2LImZupqv/ITW3SD7NkrNVWI/9qsdi6WL741wP2SG8xxaGJkx6yb40R/UXtkDs9UGXUI3nb8K1n7zY4X5601w00LNYGDzmMgExP28zVcYKmfE5ajHefuEL8HVh3T/IK3pF4DbXekn/PNcjS366AMM7IqV/LkJYsnwYUMm7Zs6K4nG9+R48jf6yM1QZvpDsMo+Y7uk8uC5flbOfX+qnA0NMTM7hVYtiJ1QT7UrNvM5lC28K+6L9g3V1yvRBr7Gaemk3PTFaY9qGG/ugcP2mbFQCzBUOv9AdhwvT+hxmCGqWjm/DzrIaM3oex7n1msM5CdZHYHUaHJNBX1t0WnLQCnFa1A4CDDk0xH3cjOUVCwlcboekWgg92HpyjlLcEZ3Uy3YuuMC2ny8hEnc8QocMC0f1qXZwrBaZ/XimwrVTGdO0OoO2inzEiRIkPTXXDYdSXeBixgxUhPyEokSm8mgerJ85YDqpJD3X643EE4/4R2kRNfEC1ynbczOVFWnsTQxSF/5AMhQa16UCEodlJWe18znIf6MAzW0w/hkLIDfn0iG217H//v9R4Tzhdh+waPytPa1GpeeGzsAr2FfFojNRFwMxHxo694OiPy8haBO70x+0Y5NqQoqoOYuhIVcujWfY4snpbEvoD4DNxorS1rpcXD1GnUiYDzGGcltO79DtVzjNTaZJbV2WSEL4HWWrlwucSb22hRPLsDU0CgaTHL2D/e64ltwagwDKkvbstEnlvCGArp6ocnkCZoZkffIia62VvsIeY038seWejyGhmmB9huiDKv/raGy904Vtcxj47k0KybGDtu0F0DDD2Du/h4gUsq7IXrmPjirHyGIABnFirmatrMK41Fes7sneJFiT6vAIHt63VjGz1w4uJzWwB5N4HkE4L23b6ffV/p8LSbKMh2FtrqsDaCO9Vqak9QM9CvrCk+ftMguw9hVfigIAl/o0jihEikGTAze8kWTseR96WVo/2E94Hnr2fF5um/wZzowQGot4gY6sbfUsRl9/BOsObWMTs9nrpGFqU2Lw86AnOU/fonC+FT3QwvIptIv1isEQKyBR9LEUlDu+eTeWY/m8rAnWZlPjJtrbaAegvaw6p8cZKJqze6viBcVbQ5l7EY9Ke6wwHw0SqsA6MwIes61WPW0Goj8XKzJIyoPJ5YCI3zr0Ixz96BJdSK8ZGiMatgGgxkIEbW5z0TcFVo4OiizSzuX34xg4JTI3E6gr2zU89vx53TUJvlAoqWepH72wEgzYFpwJBnjsJB8EoDxu5y08tJdJUPdrlPqIPUxi6nGiMi05ISXF3FYxpv60eclULhnDj57LF6gqZ3dhwv8aSHNWbZdgC8Ski1cpiwsxOFaXBGfOhsKHVliURHBfG+ZFokWy2JGxkhMPW/RbVTbkK4suKmbX5dWTM949+0BEmwsBptI+Q8LqFLAnW9ZjmRrmrqxhe7LmF9J9oYPbfM5GkrDe96Xy/bfeIxZNbIcKZ2Z8w+JXCb8hksvF1tTnmAgd99ogKB2Z8Yn6kX97bl4WXG4/EFtzS7ckF2cZZgBl5Sf3E/JaW+FZFy+lfhm7T4m1FBXqSyEbtevVvYh/BSlHKmfad3kpl5Hn2dAdvDESEQRhtBGirXo3+jOgKfUMN4zRjrLu7eRSE9s+/SIqxiP1FPF2cmHM4Ab5+PpAJKu2wzKCcLTNYOLiEa4e1Ubngie5gMqHNHM++2KoLfg8+wqBu0Y5TjFLYSbXL41FXKeinRMyMbjXT0hExHSa3CKiQ6B9ZbLuz8+uuQpMvXpCRTijQPaWBjO5cdJfe5G1OKN3c15mpXJEkdUeYEGkG/yRIX/ZQY+zzVKZg2JXYyB21UxDK96FuV5GZLANg4eYSHKmIh9LQk9ga1hiH3Mj6SFF7TE8znXj7GTR7A56183dP7Ju8QnOiLPX7JHl89VYHcM+Dbezuaatp6ZYWPh7RzE9hDsX9dq2ozIhXOAXTzM/5APRXHI1FXcgp/HHJh/Hvav64yhRanQquhSHn7mf5hYjuKrAap0kX2FcL0VrLGdotOgZYMBqEa0gtLnVu+IFqu6reNsOeGYKdVgxaalzIW2IN91hb4gMXSIg8jfyLUKzBWLbOz1fovKMJQ2XhejnfvOpRE/ecgscP2B19aQ20BSUzAteaAmLhr6Cz32dRfRTaOZFLnlqlHF0WzaLLaeZpEhAjV3BicaXq4OwM0uXJpy87+tmOZgjIvvJRgLaWJrODBNE4On7B7gl/xSPmVkNgwZPtCgyPecSw13r/yhZ4aoRcsZOXQY/iBMfLRVYMzo220Q6lwvNo5bt9JZSn/XpG2SOYrtvyJrUqKhTBr5628mUkWWRABkjpV2iBzod3CWlga2qwlrhS60IOJqrn0sLqDZ4L1vqlA9DNcsUIYrL7Giv1KRsAXw6YPVNkqGBEr7l6wB3rPTVftaFr8Q3kBb0FD1hleCmceY58rHOty3YGTZdKmZBki94yDB07d6RdipaN+E71kgHHFAm+RBoG7wkOjHLBjtp21ah+Z1CCrP5KZLgoFwmJ3qe1Al9iqk1UjaEWLediDTIqspWrZnd9JzSccB84bfSTbTk6lpKUFBf2ow8foDeWnsp/Z5IsLPIc9wGguGOUho4Ehjsqdw0o4wdyOHBwuBsgAOSkjDPiAJ/woyGQwKCb6dojQX2Bjgv90p1oXS/4wJns540ScqfLqx0W2Mdz0srrOsk+cT6Qk173FWx3U8kTJ4dXwTXI81y0SiEkLBAY1BmCvf/7plNVZ0h8EpUM2Nxstwc4jYVUlMhBn+d5F1yOtYJ+ppe0aBgYgsaz0ZrYYmbwIyokOwMPwbernv5Kc7CMUnYPlaf9sj0kFkhSb9NcmWMwNhBSDfPuXWiRCbn63B1O2hFjLH2H7Krl5ZUbKJ9/j41dVhP8SxDIFH4z7sB4d3X6EzFeVcl+ClUp7NOZMHh93bYR2j1nVWdMatJuaOBJ4RfItsdSmwnwS+A8+xDq5Da/Z0Avd3cawW/jBmIj72Y5FOqmgDCpU6YtjKhP9fJCU31YOlTAJnrMpabkbwBslZS7xNNtq//YqISuGUmbxaG02BM1gJoRHJ2/VVu9UaYxBkz3foGtKeX6Y6rbYJJCN87hRuU403/5IV+psO8CR8P7/N6zLIoczGW+yoCJY+NHSdpNQz6Pj8vlgiApOc/3867b+WP2+IYfPgmPcB0hrMjRZoaz8IS765sC7eGUkOoA6osVnnVoLRvFN3lVuqkAkLvz+o7yFRxXgV01cTZR+PF567uTHHMw/p47UJjkHXCxzlABVaWhytmkt6c5mor5zZqeslMKgK4NjbNcEFK53Y84quWkEV6PFB0F0WmbjTjrS2nbEUP9O/yJPyPHXjFYO4e1S2JHC+WIbt3DxKY53aCrHM+1K/NqlD3ZNTbtjAdcve4PHf8+aX/CjJl8fxVytdsO0dq8DRSauzP/dbN0zqnHPpvkqVCAK2UQK58U8xVInGameu3+dyImKEi2SJel4fm+42sIGnJur8h+aa4DKdtSCv6wN9DxU04wvk+RKEiYCNRqdDbH5XG7Wd3bS0XVz/1/OpPrqb7tVhAllynno2ig1CJBCL6tLjTKXjd3w9Q4gShbDUm0wmKxvT9XkzaadGBzi1SNBFtO7V1UM/gCPQVOcgTvWDwKYv7t2497l80QuQKw1cgMGn1cT+ZlyAykKiyWsdqrJS+bhgVL+mssKpNRyw35x7dHi94eIdLn+ESDwTnkVQc8FfxBF2IDmaThtD5wStrBnEOYqdpgpgRnApoqPOHwfy6eSUuLpWbLjejFr+XJLyb/BkGGcNlsc6mIyTTGblZ9sgPVv2gdN6nFnXn5ZHpmJ4xl0B1DMC7V6FreNPEfFUfi9/XfOaASlAhByHINGQm0TyDzc4uxrZD/cb1C5vQk3/qLc4g28yLIXXtpy9W7neYH/kmlG2wTOumTtWmXC+iUUCie9B5lZuL3WIdfRngXKXy0R6/ghgYkKzSLPAkTT5fnCqjqLFPlmDZUq7uzgjMtKEPquA5yYotAYZdEBt0zldWck3yOvYsoxmTvq1zJAdxNG1npya3kPOFrJrLq4GnFCCL1PpwkFcP6C35inb7uZJ1VT/jIXFYj8Zecip8uL6J6ySFf7+Kke4RIZFNayr+/UxBj3YumQl0kV/fjnelCkIv+46M3lsxYTGQKeav5GAwtMHB08aGeKkx9Mi63h3Ui1yoeM0+OK0GSZe6ychzYEFHw6feBRY0NgEXqo01EdbmXqA+me0vOBfSskNdChV1JUHpDC39dkX9AsRmTGl7o2bvCzqk0hPR/Ldm8BviFNtFTni+kIVtyL6MDhyDWLnWYIJ3HJciOaERZLdg6lAEyxRaTizbK5mSmlGx9Kn16gBNqvjwoxkoo7/QL+vrX3NvvtEQC1iRGugGHqdT/wgV3sWEX8JFqs6kNyiyUA9M1v3/sP3uiw0BriTe7JYjl1PnTc0dX5K+TAwTNTO6WaXDAOLMUPxK6NcNmrSa7feuYIjhNu910Rey9CwJ60N//DK6c0zt4oSwOnsrYN3vtc63neu9TvjtFlXiJgozt2MX2PMF85kKVInx3puQNhrUDvSaV5VEtDhRJLjpWBqMDOgtCEyLmcy8dT1wFumZxBYnDg8Gb9gAZrJ8BhfGuFGid7sHKlaXDhv6xTrstqaa1HWlF+U+gXa+seybHUbbPdx4tyOFY81qwUSlfA//B/xsy5K4Ik7CagTEJvNLPosv9yJ/p/OO2ZfdECEh0gCscOZaxvW8j2T7nPC7AGBrwmvWJyhaKY4ftgOd13jmqPZxZkxCyHObw4X1lZN/PMf5AfZQ569Qpte8CyQKnjvVMcKvno0J6MlGdGiwyQ2VAwPzZhcltMwg5KMNp9ev/NvI6ZpEWuRxqmhSLRZZtT4uzqDLoT27E6ZI8yFk1q/EsEdRh4qOntj+OdZT/NH5YlVBFUH9LVhVm1cA1AyhengvsNg8nK6FW3Labvyb9cVUhH07ovnARNGXpxpmmjPYguIx5lGPM/95L1+7eMuXcB8Xg8G/cq31HXnmbUVr20fo7mgyvpai/SYHIH4j2MK2tEtFxJuFWVunOep2LkKVLGktKNEAFcvLVkmfgA0JKv7rz4jkAgkR7MXHDORqqW0f3z9EeYj6R7XMz5pLGVKYmlcE7M7RHIy69NRix7dVmyFbz1/Ue0aWgOzDqCjB+DvRqNkVMRN1gDbqqy2FWIAaKcFFOMW5eZJ6gyl2QY810v+WdC95t6jrXuYoEGAg0JWfJWw8+73BYn2pN9AyG2BM+VR7Jd4fSHGbORPAz/Uno53wRiGDROrCgGTZFnGgSKWOjLTPpCaWdk3dONOVi8/XDhKH7RK+wpnSv2UXV50k1BXu6LboWRvzOlV8wV/Sdl1fnghoBJeO804SluyFY1kz65yXw9LXICUsEmZDwMX26GWQ73lDmyobFWhNYuv8b92jUgOa7HQBlCW7ujyur3iks+x1ZJKmH2xxA7OyXbsrmWRx1uIZevMpYNsvujVJ8XS6OMDnp6mhvACls/af+rwLB0d8Nl8YvXwyOjAQr0CLA8bgIBda5HwzamE8ftTRiGo5oWONywJBd5qgJGTwPrc8PMBeKIF5oCIdgraIM1Dgf5ChVp9g6ltqx3YG41bG7h8cfJtpzrAipxTyVHbk7+RzKT73TVX9cHfUVKRPBC1UV6Voe/w2NZGb3hJPEgxIRyNV9VdjO3V/+T5ILGRibrZm5uNPYfRPpxPoOct8lqIkimC68527Mjb9C1USzs+hJhu3v0ubt7YuS30FXmxvSIxFQLxSYMDgDxo7FBuqeAfpno45tz3JDPNMtrdI7bpJK9jfOCFduR3WRtOB+oO09P/DvMiXqDu3ZvxnqSAJ9zgmeKkyW9BuBpSs7Se6UarwBW5NQijO/7VgpiSh3INbZUt4enUxcBPOpC9gKn6XSPuw5aWvJbiC4allmUsE2jwGpLUeGb5zi2Kf3MqdNt676/JcO+/ZRLWPhDqiUBFoNVNagu6kQ7L/A0cLNZ6w8sHbFDQms6OxQtIjp//+kfyt3ZeoLpg4Hy2v+bcxYxp6Q9U6RH73Si9tjO6YF5YZmKys+KJbdj+k7kro0imrTgUJtRPp5Wn5/Qk2D9jYCt/MgcD79R9QjjM5z7C3TWki3Bb5SgDT74IZxFjVOI0RYiNnRh3untbVqxizF3JfiO/4JQw+s2KH1wgyEHhA4klgWx4MGiMPFZ8odZi1Ke/Yy7rQtyXZT6S+lQa83GyeFs+NZooR1+h0qk1+dz2PODLdQoj2tGcQ2t90LIGxPdf452vAKY+TqQ5nY6EiyUWb4pBC/kO43Cs6OT9Jp05be0vqSZn01MgXdde2w4XtpcHGPWocXH/7GbtfXXdHRnJo5pqLlRj1flCF5km1UpbHlyRYg5RgQ4VnBJx+i1SEnW+2ZeC/mH+rOFUELgPTMINEmVirasA24WwA2qyX9VrvLcxipAt9YVC8n3G06sOY5XCTBY9q0nBIRaotwgWWna2FUOleOcZfkOwv8RCwrgQ6kleCO2bnmJU/ne2UM/7T4e7bOiWtsFqB0USXXpH9nqKdatQ2C1ENdU+zA0mYCTXI24mmRDGoGtkGnMB/CLgUA2rLTLgYwHI5w8Jjdn+Bqg/RroW2D8CBfX2HF75YlDKwLBps4YxwZUIF6IAwbGhrFCC+FlSXDK6dIZ98ccnb/ZLB9f8RgncA1n/vIkMB8nvqWMYdtEnyReY2eqn+YJ/atRCTz/Rnkx1tC/x2m8uCVomdDxPsPSWcov0Q5lw0GGFaHjO0ojA7G2pBmFr8piblJYEi0BGub/LLjgj4Rz6GWqg7TJos4pN5G7JHeJ/wG7ucoVUusHv5pu4uRw2LFActqIeWIIwtQQ7YUJcPdFNg73F0b1ZnYcWOAuh8tU7slpNUKhJyli6V9m35u6Bk1Ea+doTdj41U5b6aZ6jghlI2IsbH5HUGn1gVkhtNXbn+OCjL9rHzZcuIvUGkA1A8NNacD+9M3qL4ukoKZpPkCovwPCGKzzjfnanA06D93gKp9nux2rYUbCAgzi4y/6MsbI1xVpVJyHS5A6q97FopPg/VruvDdSHa5cGmn82pEJLocDX838nN2rhLRbgNF2NrSp1TWYLlIBshsvqYo/YcDLlRKla076vq8JifAe5nH97cKoj4k3KEVtfOj9y2PP4k4VgWFzGH+WSVC5YzyCExnJwZHy9Z9HN5D/uOp6qDT716rn5VP08UesvD0HFUE0rrcV+JjLtx4oGw00ckfbK9Q6dsNMeClmMpte9TTB3YLazd4pnh2XBuZ+fM5v351l/xj1jZLBWbq5wJm9fglSxUH/mOM+cPwGpmcJHbWGfDKkWqquuHw1MUT9jMlYECe9l3J2dcV55AYaytL6Fo0Wz6m/BDyCWBUidvGOWdTYx3tT3x1itOx/601CK4UM4ztus+1b2QWkNsJtnyukdyMJiqVL0JDM2pSrfdgVWsWexBqaSz63HBXZYYRU4EMSo0+jDcKmMjMXBLPPkgbdX+EuC6q34/Y6dwAtFC7D5nh9hS8IXky62mK1qbDne0/zY88TVrh63x791g8heQCFUj1wvIs9IBH4popPn/RVz5xQ1VgI5OYbjV3nEhWx8xD1tZI1TpD7trFhEzNgNKXYGziCasdM5JbgkTpJSeCfEOH4O4ezLZSAOAA9cDdVfsNWewGRQ98tuji/1gfW0iQ2g7f/9LlbltQhL/UtSYuiYyZ5M/2hw5JZG7i6jGWzeAhZzfGRNcEu6rlQ1/58LCuTwYShRSYrwDDAB9h5nscPAXPjIA8Zxll7qCUv9vPMFHw1K6wI8i+uwzH+fJ5lt5RRJEw7KNngup/ChmcHpSXU8e+NjfQrmS6QkZsXo6OTfILhqvL5dRUCI7wvnMvUnPD2oKy+EM6tiiwvMrgpXQNPIGQu+TOgHdMExzBNarJZ5uCaU/xE9tLGqP5He8NU6q8mBSErg5bOELba7PEX2kntY6CXZbmfvZUtG7LMNz6T0hSKL2GRHR4u0Ou0NTZPxx0kiX0+aXTM7+iS/XVWchwN0MgbSVruZ4xytEMWzwjyeSGrB4mYO8RENsG8VJZgX/36XNp3bxBALBl56mJlaVm1oANByS+rftmBYphJNZl31QEI7xoMx6Z5kTfF77r7bDf5NIQF6g487LFqGbkGqMk0n8NpFMqUuQMw38uJOQRMO1bG67Cr8eO3Z+thogQAt3ziZ7GjyUjOF1+b52Ko6VqqH1naZKswa8Ju30sZDsgt5IjGMCE1d7VmL/woMYn8jNZwOVkT3FveJCcFjHFgEd7C3jcxFLtHw3waZf9NkTiflVfByYJWcn1itUDe7lkauelTT8HN9NJzS2pj739UWnX6o/3yvmj27yxO6KbrGJ7XI46w14ksgdky9KguK+F5/KiX5xqIrlxpbtb0zf01GwPb0o7wzanQOlnSJKCbY9GOXqQ5hPrP0WSAbFqb7Ezr7n+eowEZMIBb8tXyK3S6qnUSgXZ7XKDsP2Eun1kJ4boAH7P0hn11ZN9VizAxenlnv8wKOObcMm0UHnpPWHqtj2tmynkqJdo29zbYceCrLwlpLl3Y8cDM/P/Opneq/G2DPSwIWAu8SYod2EB3LTWJlRLtWaoCqA92r2wlpsNPIPClyTgxoiMgr8QP0jhK6FOBCCosn6csOQ5asVsUutQSFSZwdF48hwG0ySdm2L8JMpJrqZu1asTsHq8U0lTEP2qQzZyTEvx7Hsy2/FvsPalhygvPKYTaIj9PqBwH8/V60XDoHpq6HNQNGXbLf+AMsh2/v5LFai8SZ09D22ChuqtEs6c/TWd2Zg9YRJ+fE+CxduFaSlk0ChfUhS0oLrKRy2g0N6+TkE62mpi3rW0R2HkiS7IjQBaXKGDOYmpZFPBsP14/Z3mq8ZAGsb82KQD8pCA64z1M/S3YkaRTr61azaRKKeQ2dNZOhO8fk2tbkPwcSEjy/Ug/DBmZESjcirZe/Y77WG1X0a5OIXjGTcDQo2KmDEgT2QXnjFVZ6ZmZC/hM3SdSKeeXFkAzFix0rujeP8wkNpcijMas3heI0xw9p4X/YvtwZhXagQJl8PS2xqldIHj+e+Z2A001+b2ddpyyK1A5i0uHYUhq2Cnr3kcuT08iAeUi05IjLJn6OOcMcIuuGBL0sWknx1BHJG79Um78aAT/Z92YuvRbjsQkpnzx13678s0gktSAki5h6DlpTSB1LuaRMEla3xMxUqU+WYHSJurUjzCxVyQMNwd9Nhqtnpkbshg41e52iPp/hWsda39YeK//HQOnwO4hZpYlAjUvHNhyFDivTCwfDmrClYRow52VbXij2sxhy+pPqH7vN+WhASvstXzvdH34VpC1OeBNw6axgrCF38faMhi5OCbztvx1WFDwmPM/icI0cFwOKKLJZial0CGicvr9zdg6THADzzysM55K6LOdezVxSVSdvuR5WoYMsST+gIlqVvbgDHUB737Fq3pyi1kpyQ5/L3/NBIBfT9FVaUlhYq1OAsknLiBxMRdDPj0TXGeNsK/6N2SRvFVszEPt4hzrupCqdl+NczVobzyxrseNL8LLNU4SYgglRVS0/B/g+qc8p6cAVpmgSFr491vqCE1Ve9H1WtszCyI21weUunIvbEmP0Vgv75S4ZkT4PCmFpl8eyH69DDvDI/VBCfsF2F18NO/22GLcIHIWYL2PoLl0Mp55GMfQOEvs6fhVLxabQhw5mdSfOB+EVZiylYRF9F+2aLO7I3VtUPPQ7CwoU85QKGcq3+zZpsTLu2KFtoCUmfijYPMH/yjXb/BBZRmAHIJ8Wm62Sxdk2JxKcILxSKZH+gBhsdWAbztusjPNpS96INMmYmyhVjHumiNbj2iNhRV7eLvqT4ardlHjZHPIPyQymyxCyRFY8lLJ2ZuEeDlhmJnPhm/ssmD+YSFvjsGv89lkEHHT4rZctyLN7w+rYOkjbK+LDOC/BZMVGwXgp8OKSYvw2l0N1SYEwnscngBO9+vyU4I1stgYlezt7CXYWJaCwUrTq2v/Pf8Pzcyv9k2ZSeZP1FennOG4h3eIQoEk2nzam2vwhXVaOEj4nroNuHxZv5NiNSbCCqSaKGh39eEVbZ7F7jcftwlXbc/Hp5Hm/dXK8QaJY6kiBVQAnB7HWa1ly7dV3VTodV74uSgoWeYxJbHB5li8SNMsITnG9wd5REq17Tn7Urw/pegjY6O0ICBP0sgEkprtr/Zj3cSWrfZaNMgU4xxFyOm0bd3OVaYyUOvg0A+D7IL4Vem9uTVNDKKjVO3/RsHYuJSBCL2PwoO93viavjZFuCN0497tc7pT7D1K8MAPTcTeVsrkZ46HXyya+iUsePJ7OJqEZJoOkbQvr6MaQ7MVDe8="
+};
+
+/* =====================================================================
+ * 以上四个字面量由 scripts/build.py 整块替换（见 README「注入契约」）。
+ * 下面是页面逻辑，不依赖任何外部库：图表全部是手写的内联 SVG。
+ *
+ * 隐私模型是**按物品整条隐藏**，没有字段级打码：GEAR_ITEMS 里的每条都是
+ * 全字段（含价格、渠道、日均、次均、回本日），一律明文渲染。锁着的时候
+ * 缺的不是某几个字段，而是整整 hidden_count 件物品；解锁＝把 hidden_items
+ * 并进列表，并把 totals_visible / daily_burn_visible 整块换成全集那两份。
+ * ===================================================================== */
+(function () {
+  "use strict";
+
+  var STORAGE_KEY = "gear-data-password";
+  var ITERATIONS = 150000;
+
+  var SYM = GEAR_META.currency_symbol || GEAR_SCHEMA.currency_symbol || "¥";
+  var CATS = GEAR_SCHEMA.categories || {};
+  var PERIODS = GEAR_SCHEMA.periods || {};
+  var REASONS = GEAR_SCHEMA.retire_reasons || [];
+  var WORTH = GEAR_META.worth_it_daily_cost || GEAR_SCHEMA.worth_it_daily_cost || { "default": 1 };
+  var TODAY = GEAR_META.today || new Date().toISOString().slice(0, 10);
+  var HIDDEN_COUNT = GEAR_META.hidden_count || 0;
+  var DAY = 86400000;
+
+  /* 三份「会在解锁时整块换掉」的读数。初值＝可见集那一份。 */
+  var ITEMS  = GEAR_ITEMS.slice();
+  var TOTALS = GEAR_META.totals_visible || {};
+  var BURN   = (GEAR_META.daily_burn_visible || []).slice();
+  var isUnlocked = false;
+
+  var PREFERS_STILL = !!(window.matchMedia &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  var state = {
+    q: "", cat: "", status: "", period: "", tag: "",
+    sort: "acquired", dir: -1, view: "card", group: "year", selected: null
+  };
+
+  /* ---------------- 基础工具 ---------------- */
+  function $(sel) { return document.querySelector(sel); }
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+  function parseD(s) { return Date.parse(String(s) + "T00:00:00Z"); }
+  function fmtD(ms) { return new Date(ms).toISOString().slice(0, 10); }
+  function daysBetween(a, b) { return Math.round((b - a) / DAY); }
+  function num(n, digits) {
+    if (n == null || !isFinite(n)) return "—";
+    return Number(n).toLocaleString("zh-CN", {
+      minimumFractionDigits: digits == null ? 2 : digits,
+      maximumFractionDigits: digits == null ? 2 : digits
+    });
+  }
+  function money(n, digits) { return n == null || !isFinite(n) ? "—" : SYM + num(n, digits); }
+  // 带正负号的金额：阶梯的高度是有方向的，符号要看得见（− 用真的减号）
+  function signedMoney(n) {
+    if (n == null || !isFinite(n)) return "—";
+    return (n < 0 ? "−" : "+") + SYM + num(Math.abs(n), 2);
+  }
+  function catColor(c) { return (CATS[c] && CATS[c].color) || "#868E96"; }
+  function catIcon(c) { return (CATS[c] && CATS[c].icon) || "📦"; }
+  function periodLabel(p) { return (PERIODS[p] && PERIODS[p].label) || p || "—"; }
+  // 「每周 3 次」这句话由 build.py 合好了（use_label），页面不再自己拼
+  function useLabel(it) { return it.use_label || periodLabel(it.period) || "—"; }
+  function worthLine(cat) {
+    var v = WORTH[cat];
+    return typeof v === "number" ? v : (typeof WORTH["default"] === "number" ? WORTH["default"] : 1);
+  }
+  function itemEnd(it) { return it.retired || TODAY; }
+  function usesOf(it) {
+    if (it.uses != null) return it.uses;
+    return it.days_held / 365 * (it.uses_per_year || 0);
+  }
+  function byId(id) {
+    for (var i = 0; i < ITEMS.length; i++) if (ITEMS[i].id === id) return ITEMS[i];
+    return null;
+  }
+  function unlocked() { return isUnlocked; }
+
+  // 按年使用次数分桶：每天级 / 每周级 / 每月级 / 每年级，阈值取 periods.per_year
+  var PERIOD_ORDER = Object.keys(PERIODS).sort(function (a, b) {
+    return (PERIODS[b].per_year || 0) - (PERIODS[a].per_year || 0);
+  });
+  function useBucket(it) {
+    var upy = it.uses_per_year || 0;
+    for (var i = 0; i < PERIOD_ORDER.length; i++) {
+      if (upy >= (PERIODS[PERIOD_ORDER[i]].per_year || 0)) return PERIOD_ORDER[i];
+    }
+    return PERIOD_ORDER[PERIOD_ORDER.length - 1];
+  }
+
+  /* ---------------- 解密（与 wm-blog assets/js/lock.js 同参数） ---------------- */
+  function b64ToBytes(b64) {
+    return Uint8Array.from(atob(b64), function (c) { return c.charCodeAt(0); });
+  }
+  function deriveKey(password, salt) {
+    return crypto.subtle
+      .importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"])
+      .then(function (base) {
+        return crypto.subtle.deriveKey(
+          { name: "PBKDF2", salt: salt, iterations: ITERATIONS, hash: "SHA-256" },
+          base,
+          { name: "AES-GCM", length: 256 },
+          false,
+          ["decrypt"]
+        );
+      });
+  }
+  // AES-GCM 自带认证标签：密码错误时 decrypt 直接 reject，不需要 canary。
+  function decryptSecret(password) {
+    if (!GEAR_SECRET || !GEAR_SECRET.ciphertext) return Promise.reject(new Error("no-ciphertext"));
+    return deriveKey(password, b64ToBytes(GEAR_SECRET.salt)).then(function (key) {
+      return crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: b64ToBytes(GEAR_SECRET.iv) },
+        key,
+        b64ToBytes(GEAR_SECRET.ciphertext)
+      );
+    }).then(function (buf) {
+      return JSON.parse(new TextDecoder().decode(buf));
+    });
+  }
+  function storedPassword() {
+    try { return sessionStorage.getItem(STORAGE_KEY); } catch (e) { return null; }
+  }
+  function storePassword(p) {
+    try { sessionStorage.setItem(STORAGE_KEY, p); } catch (e) { /* 隐私模式：忽略 */ }
+  }
+  function clearPassword() {
+    try { sessionStorage.removeItem(STORAGE_KEY); } catch (e) { /* 同上 */ }
+  }
+
+  // 解密结果 → 三份读数整块换掉。hidden_items 并进列表后就是普通物品，
+  // 排序、筛选、榜单、时间线一视同仁，只多一个 hidden: true 的标记。
+  function applySecret(data) {
+    var hidden = (data && data.hidden_items) || [];
+    ITEMS  = GEAR_ITEMS.concat(hidden);
+    TOTALS = (data && data.totals_all) || GEAR_META.totals_visible || {};
+    BURN   = ((data && data.daily_burn_all) || GEAR_META.daily_burn_visible || []).slice();
+    isUnlocked = true;
+  }
+  function revertSecret() {
+    ITEMS  = GEAR_ITEMS.slice();
+    TOTALS = GEAR_META.totals_visible || {};
+    BURN   = (GEAR_META.daily_burn_visible || []).slice();
+    isUnlocked = false;
+  }
+
+  function setLockMsg(text, kind) {
+    var el = $("#lock-msg");
+    el.textContent = text || "";
+    el.className = "lock-msg" + (kind ? " " + kind : "");
+  }
+  // 整个解锁入口只在真有隐藏物品时存在——没有隐藏物品就没有「锁」这回事。
+  function syncLockAffordance() {
+    var box = $("#lock-box");
+    box.hidden = HIDDEN_COUNT === 0;
+    if (HIDDEN_COUNT === 0) return;
+    var btn = $("#lock-toggle");
+    btn.textContent = unlocked()
+      ? "🔓 已显示 " + HIDDEN_COUNT + " 件隐藏物品，点击收起"
+      : "🔒 显示隐藏物品（" + HIDDEN_COUNT + " 件）";
+    btn.classList.toggle("is-on", unlocked());
+  }
+  function openLockForm(open) {
+    var form = $("#lock-form");
+    form.hidden = !open;
+    $("#lock-toggle").setAttribute("aria-expanded", open ? "true" : "false");
+    if (open) { setLockMsg(""); $("#lock-pw").focus(); }
+  }
+  function doUnlock(password) {
+    if (!password) { setLockMsg("请输入密码。", "err"); return; }
+    if (!window.crypto || !crypto.subtle) {
+      setLockMsg("当前浏览器不支持 WebCrypto（需要 HTTPS 或 localhost）。", "err");
+      return;
+    }
+    setLockMsg("解密中…", "");
+    decryptSecret(password).then(function (data) {
+      applySecret(data);
+      storePassword(password);
+      setLockMsg("已显示 " + HIDDEN_COUNT + " 件隐藏物品。", "ok");
+      syncLockAffordance();
+      fillFilters();
+      renderAll();
+      setTimeout(function () { openLockForm(false); }, 350);
+    }).catch(function (err) {
+      revertSecret();
+      syncLockAffordance();
+      if (err && err.message === "no-ciphertext") {
+        setLockMsg("这份页面没有加密数据（模板占位状态）。", "err");
+      } else {
+        setLockMsg("密码错误，请重试。", "err");
+      }
+    });
+  }
+  function doLock() {
+    revertSecret();
+    clearPassword();
+    syncLockAffordance();
+    setLockMsg("");
+    fillFilters();
+    renderAll();
+  }
+
+  /* ---------------- 筛选与排序 ---------------- */
+  // 金额不再是秘密，所以没有「锁着时不能按这列排」这回事了：全部列一直可排。
+  var SORTS = [
+    { key: "acquired",    label: "获得日期", get: function (it) { return parseD(it.acquired); } },
+    { key: "days_held",   label: "服役天数", get: function (it) { return it.days_held; } },
+    { key: "uses_per_year", label: "使用频率", get: function (it) { return it.uses_per_year || 0; } },
+    { key: "name",        label: "名称", text: true, get: function (it) { return it.name || ""; } },
+    { key: "price",       label: "购买价",   get: function (it) { return it.price; } },
+    { key: "daily_cost",  label: "日均成本", get: function (it) { return it.daily_cost; } },
+    { key: "cost_per_use",label: "次均成本", get: function (it) { return it.cost_per_use; } }
+  ];
+  function sortDef(key) {
+    for (var i = 0; i < SORTS.length; i++) if (SORTS[i].key === key) return SORTS[i];
+    return SORTS[0];
+  }
+  function filteredItems() {
+    var q = state.q.trim().toLowerCase();
+    return ITEMS.filter(function (it) {
+      if (state.cat && it.category !== state.cat) return false;
+      if (state.status && it.status !== state.status) return false;
+      if (state.period && it.period !== state.period) return false;
+      if (state.tag && (it.tags || []).indexOf(state.tag) < 0) return false;
+      if (q) {
+        var hay = [it.name, it.brand, it.note, (it.tags || []).join(" ")].join(" ").toLowerCase();
+        if (hay.indexOf(q) < 0) return false;
+      }
+      return true;
+    });
+  }
+  function sortItems(list) {
+    var def = sortDef(state.sort), dir = state.dir;
+    return list.slice().sort(function (x, y) {
+      var vx = def.get(x), vy = def.get(y);
+      if (def.text) return String(vx).localeCompare(String(vy), "zh-Hans-CN") * dir;
+      if (vx == null) vx = -Infinity;
+      if (vy == null) vy = -Infinity;
+      return (vx - vy) * dir;
+    });
+  }
+
+  // 卡片流里出现了哪些年份栏（年 → 件数）——左侧曲线的年份刻度靠它决定哪些能点。
+  // renderAll 里 renderList 先于 renderBurnAll，所以曲线拿到的永远是当前这一批。
+  var YEAR_SECTIONS = {};
+
+  /* ---------------- 图表通用件 ---------------- */
+  function wrapWidth(el) {
+    var w = el.clientWidth || (el.parentNode && el.parentNode.clientWidth) || 680;
+    return Math.max(260, w);
+  }
+  function ensureTip(wrap) {
+    var tip = wrap.querySelector(".tip");
+    if (!tip) {
+      tip = document.createElement("div");
+      tip.className = "tip";
+      wrap.appendChild(tip);
+    }
+    return tip;
+  }
+  // 提示条：数值在前、标签在后；文本一律走 textContent，不拼 innerHTML。
+  function showTip(wrap, tip, x, y, value, label, color) {
+    tip.textContent = "";
+    var v = document.createElement("strong");
+    v.className = "t-val";
+    v.textContent = value;
+    tip.appendChild(v);
+    var l = document.createElement("span");
+    if (color) {
+      var k = document.createElement("i");
+      k.className = "t-key";
+      k.style.background = color;
+      l.appendChild(k);
+    }
+    l.appendChild(document.createTextNode(label));
+    tip.appendChild(l);
+    tip.classList.add("show");
+    var w = tip.offsetWidth, h = tip.offsetHeight, W = wrap.clientWidth;
+    var left = Math.min(Math.max(4, x - w / 2), Math.max(4, W - w - 4));
+    tip.style.left = left + "px";
+    tip.style.top = Math.max(2, y - h - 10) + "px";
+  }
+  function hideTip(tip) { tip.classList.remove("show"); }
+  function textPx(text, fontPx) {
+    // CJK 约等于一个字宽 = 字号，拉丁字母约 0.55 倍；够用的粗略估算。
+    var width = 0;
+    for (var i = 0; i < text.length; i++) {
+      width += text.charCodeAt(i) > 0x2e80 ? fontPx : fontPx * 0.55;
+    }
+    return width;
+  }
+  function truncate(text, maxPx, fontPx) {
+    var width = 0, out = "";
+    for (var i = 0; i < text.length; i++) {
+      var w = text.charCodeAt(i) > 0x2e80 ? fontPx : fontPx * 0.55;
+      if (width + w > maxPx - fontPx) return out + "…";
+      width += w;
+      out += text[i];
+    }
+    return out;
+  }
+  // 坐标轴上界取「好看」的整数：0 / 15 / 30 比 0 / 11.3 / 22.6 好读。
+  function niceCeil(v) {
+    if (!(v > 0) || !isFinite(v)) return 1;
+    var half = v / 2;
+    var e = Math.pow(10, Math.floor(Math.log10(half)));
+    var m = half / e;
+    var n = m <= 1 ? 1 : m <= 1.5 ? 1.5 : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 3 ? 3 : m <= 4 ? 4 : m <= 5 ? 5 : m <= 7.5 ? 7.5 : 10;
+    return n * e * 2;
+  }
+  function emptyState(msg) {
+    return '<p class="quiet-note">' + esc(msg) + "</p>";
+  }
+
+  /* ---------------- §A 开篇那一句话 ---------------- */
+  // 用 TOTALS（全库口径，解锁时整块换过一档），不跟随筛选——它是「概览」。
+  // 筛选后的读数在折叠区的「总账」里。
+  function renderOpening() {
+    var items = ITEMS;
+    var inUseCount = TOTALS.count_in_use != null ? TOTALS.count_in_use
+      : items.filter(function (i) { return i.status === "in_use"; }).length;
+    var retiredCount = TOTALS.count_retired != null ? TOTALS.count_retired
+      : items.length - inUseCount;
+    var total = TOTALS.count != null ? TOTALS.count : items.length;
+    var burn = TOTALS.daily_cost_in_use;
+    var avgDays = items.length ? items.reduce(function (s, i) { return s + i.days_held; }, 0) / items.length : 0;
+    var longest = items.slice().sort(function (a, b) { return b.days_held - a.days_held; })[0];
+    var lastAcq = items.length ? Math.max.apply(null, items.map(function (i) { return parseD(i.acquired); })) : null;
+    var sinceLast = lastAcq == null ? null : daysBetween(lastAcq, parseD(TODAY));
+
+    var line;
+    if (!total) {
+      line = "还没有登记任何物品。";
+    } else if (inUseCount && burn != null) {
+      line = "我每天为身边这 " + inUseCount + " 件东西花掉 " +
+        '<span class="fig">' + esc(money(burn)) + "</span>";
+    } else {
+      line = "这 " + total + " 件东西都已经退役，平均陪了我 " +
+        '<span class="fig">' + esc(num(avgDays, 0)) + "</span> 天";
+    }
+
+    var facts = [];
+    if (total) {
+      facts.push("共 <b>" + total + "</b> 件：在用 <b>" + inUseCount +
+        "</b>、已淘汰 <b>" + retiredCount + "</b>");
+      facts.push("累计投入 <b>" + esc(money(TOTALS.total_price)) + "</b>");
+      if (TOTALS.total_resale) facts.push("二手回收 <b>" + esc(money(TOTALS.total_resale)) + "</b>");
+      facts.push("平均服役 <b>" + esc(num(avgDays, 0)) + "</b> 天");
+      if (longest) facts.push("陪我最久：" + esc(longest.name) +
+        " <b>" + esc(num(longest.days_held, 0)) + "</b> 天");
+      if (sinceLast != null) facts.push("距上次登记新物品 <b>" + esc(num(sinceLast, 0)) + "</b> 天");
+      // 解锁会让上面这些数字整块跳一档——把这件事写在数字旁边，别让人以为读数不稳。
+      if (HIDDEN_COUNT > 0) {
+        facts.push(unlocked()
+          ? '<span class="scope">以上读数含 <b>' + HIDDEN_COUNT + "</b> 件已隐藏物品</span>"
+          : '<span class="scope">以上读数只含可见物品，另有 <b>' + HIDDEN_COUNT + "</b> 件已隐藏</span>");
+      }
+    }
+    $("#opening").innerHTML =
+      '<p class="line">' + line + "</p>" +
+      (facts.length ? '<p class="facts">' +
+        facts.map(function (f) { return "<span>" + f + "</span>"; }).join("") + "</p>" : "");
+  }
+
+  /* ---------------- §E 日均成本 vs 服役天数（双对数散点） ----------------
+   * 在折叠区里，跟随上方筛选（items 来自 renderStats 收到的那份），双对数轴：
+   * daily_cost = net_cost / days_held，所以「净成本相同」在双对数下是一条
+   * 斜率 -1 的直线——画三条参考线（¥100/¥1000/¥10000）比列一堆数字直观。
+   * 回本线（worth_it_daily_cost.default）是另一条参考线，水平，颜色沿用
+   * renderDecay() 里回本线那一支色（var(--accent-2)）。
+   * 净成本 ≤ 0（赠品/已回本卖出）或 days_held <= 0 的物品进不了对数轴，剔除。 */
+  function niceFloor125(v) {
+    if (!(v > 0) || !isFinite(v)) return v;
+    var e = Math.pow(10, Math.floor(Math.log10(v)));
+    var m = v / e;
+    var n = m >= 5 ? 5 : m >= 2 ? 2 : 1;
+    return n * e;
+  }
+  function niceCeil125(v) {
+    if (!(v > 0) || !isFinite(v)) return v;
+    var e = Math.pow(10, Math.floor(Math.log10(v)));
+    var m = v / e;
+    var n = m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10;
+    return n * e;
+  }
+  // 1-2-5 每十倍一档的刻度，落在 [lo, hi] 区间内（含端点附近的浮点误差）
+  function ticks125(lo, hi) {
+    var out = [];
+    var k0 = Math.floor(Math.log10(lo)), k1 = Math.ceil(Math.log10(hi));
+    for (var k = k0; k <= k1; k++) {
+      var e = Math.pow(10, k);
+      [1, 2, 5].forEach(function (m) {
+        var v = m * e;
+        if (v >= lo * 0.999 && v <= hi * 1.001) out.push(v);
+      });
+    }
+    return out;
+  }
+  function renderScatter(wrapSel, items) {
+    var wrap = $(wrapSel);
+    var pts = [], excluded = 0;
+    items.forEach(function (it) {
+      if (it.daily_cost != null && it.daily_cost > 0 && it.days_held != null && it.days_held > 0) {
+        pts.push(it);
+      } else if (it.daily_cost != null && it.daily_cost <= 0) {
+        excluded++;
+      } else if (it.days_held != null && it.days_held <= 0) {
+        excluded++;
+      }
+    });
+    $("#scatter-note").textContent = excluded > 0
+      ? excluded + " 件净成本 ≤ 0（赠品或已回本），不在图上。" : "";
+    if (!pts.length) { wrap.innerHTML = emptyState("暂无可画的物品。"); return; }
+
+    var W = wrapWidth(wrap), H = 230, mL = 54, mR = 14, mT = 18, mB = 28;
+    var plotW = Math.max(40, W - mL - mR), plotH = H - mT - mB;
+    var xsRaw = pts.map(function (it) { return it.days_held; });
+    var ysRaw = pts.map(function (it) { return it.daily_cost; });
+    var xMin = niceFloor125(Math.min.apply(null, xsRaw));
+    var xMax = niceCeil125(Math.max.apply(null, xsRaw));
+    var yMin = niceFloor125(Math.min.apply(null, ysRaw));
+    var yMax = niceCeil125(Math.max.apply(null, ysRaw));
+    if (!(xMax > xMin)) xMax = xMin * 10;
+    if (!(yMax > yMin)) yMax = yMin * 10;
+    var lx0 = Math.log10(xMin), lx1 = Math.log10(xMax);
+    var ly0 = Math.log10(yMin), ly1 = Math.log10(yMax);
+    function X(d) { return mL + (Math.log10(d) - lx0) / (lx1 - lx0) * plotW; }
+    function Y(v) { return mT + (1 - (Math.log10(v) - ly0) / (ly1 - ly0)) * plotH; }
+
+    var s = ['<svg width="' + W + '" height="' + H +
+      '" role="img" aria-label="日均成本 vs 服役天数散点图，双对数坐标">'];
+    // 网格 + 刻度：x 轴＝天数（num），y 轴＝金额（money）
+    ticks125(xMin, xMax).forEach(function (d) {
+      var gx = X(d).toFixed(1);
+      s.push('<line x1="' + gx + '" y1="' + mT + '" x2="' + gx + '" y2="' + (mT + plotH) +
+        '" stroke="var(--grid)" stroke-width="1"/>');
+      s.push('<text x="' + gx + '" y="' + (H - 8) + '" fill="var(--muted)" font-size="11" text-anchor="middle">' +
+        esc(num(d, 0)) + "</text>");
+    });
+    ticks125(yMin, yMax).forEach(function (v) {
+      var gy = Y(v).toFixed(1);
+      s.push('<line x1="' + mL + '" y1="' + gy + '" x2="' + (mL + plotW) + '" y2="' + gy +
+        '" stroke="var(--grid)" stroke-width="1"/>');
+      s.push('<text x="' + (mL - 6) + '" y="' + (Number(gy) + 4) + '" fill="var(--muted)" font-size="11" text-anchor="end">' +
+        esc(money(v, v < 1 ? 2 : 0)) + "</text>");
+    });
+    // 等净成本参考线：daily_cost = net_cost / days_held，双对数下是斜率 -1 的直线
+    [100, 1000, 10000].forEach(function (C) {
+      var xa = Math.max(xMin, C / yMax), xb = Math.min(xMax, C / yMin);
+      if (!(xa < xb)) return;
+      var pax = X(xa).toFixed(1), pay = Y(C / xa).toFixed(1);
+      var pbx = X(xb).toFixed(1), pby = Y(C / xb).toFixed(1);
+      s.push('<line x1="' + pax + '" y1="' + pay + '" x2="' + pbx + '" y2="' + pby +
+        '" stroke="var(--grid)" stroke-width="1" stroke-dasharray="4 3"/>');
+      s.push('<text x="' + pax + '" y="' + (Number(pay) - 5) +
+        '" fill="var(--muted)" font-size="10.5" text-anchor="middle">' + esc(money(C, 0)) + "</text>");
+    });
+    // 回本线：GEAR_META.worth_it_daily_cost.default，水平虚线
+    var worthDefault = typeof WORTH["default"] === "number" ? WORTH["default"] : 1;
+    if (worthDefault > yMin && worthDefault < yMax) {
+      var wy = Y(worthDefault).toFixed(1);
+      s.push('<line x1="' + mL + '" y1="' + wy + '" x2="' + (mL + plotW) + '" y2="' + wy +
+        '" stroke="var(--accent-2)" stroke-width="1.5" stroke-dasharray="5 3"/>');
+      s.push('<text x="' + (mL + plotW - 4) + '" y="' + (Number(wy) - 5) +
+        '" fill="var(--ink-2)" font-size="10.5" text-anchor="end">回本线 ' + esc(money(worthDefault)) + "/天</text>");
+    }
+    // 点：在用＝实心，已淘汰＝描边（与甘特图的实心/描边约定一致）
+    pts.forEach(function (it) {
+      var color = catColor(it.category), live = it.status === "in_use";
+      var cx = X(it.days_held).toFixed(1), cy = Y(it.daily_cost).toFixed(1);
+      s.push('<circle cx="' + cx + '" cy="' + cy + '" r="4"' +
+        (live ? ' fill="' + esc(color) + '"' : ' fill="none" stroke="' + esc(color) + '" stroke-width="1.5"') + "/>");
+    });
+    // 命中区：透明大圆，独立于墨点之上
+    pts.forEach(function (it) {
+      var cx = X(it.days_held).toFixed(1), cy = Y(it.daily_cost).toFixed(1);
+      var aria = (it.hidden ? "🔒 " : "") + it.name + "，" + money(it.daily_cost) + "/天，" +
+        num(it.days_held, 0) + " 天";
+      s.push('<circle class="sc-hit" data-id="' + esc(it.id) + '" cx="' + cx + '" cy="' + cy +
+        '" r="11" tabindex="0" role="button" aria-label="' + esc(aria + "，按回车看这件物品的详情") + '">' +
+        "<title>" + esc(aria) + "</title></circle>");
+    });
+    s.push("</svg>");
+    wrap.innerHTML = s.join("");
+
+    var byPtId = {};
+    pts.forEach(function (it) { byPtId[it.id] = it; });
+    var tip = ensureTip(wrap);
+    Array.prototype.forEach.call(wrap.querySelectorAll(".sc-hit"), function (hit) {
+      var id = hit.getAttribute("data-id");
+      var it = byPtId[id];
+      function show() {
+        var r = hit.getBoundingClientRect(), wr = wrap.getBoundingClientRect();
+        showTip(wrap, tip, r.left - wr.left + r.width / 2, r.top - wr.top,
+          money(it.daily_cost) + "/天", (it.hidden ? "🔒 " : "") + it.name + " · " + num(it.days_held, 0) + " 天",
+          catColor(it.category));
+      }
+      function hide() { hideTip(tip); }
+      function go() { openDetail(id); }
+      hit.addEventListener("pointerenter", show);
+      hit.addEventListener("pointermove", show);
+      hit.addEventListener("pointerleave", hide);
+      hit.addEventListener("focus", show);
+      hit.addEventListener("blur", hide);
+      hit.addEventListener("click", go);
+      hit.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); }
+      });
+    });
+  }
+
+  /* ---------------- §C 日均花费时序（阶梯线，页面主角图） ----------------
+   * daily_burn_* 是**变更点**列表，不是逐日采样：两个变更点之间值恒定。
+   * 所以画法固定是 stepAfter —— 先沿时间轴走到下一个时刻（值不变），
+   * 再原地跳一级（时间不动）。**永远不能平滑，也不能两点间斜着连线**：
+   * 斜线会暗示中间有过渡值，而中间根本没有发生任何事。
+   * 实现上只用绝对 H / V 两种指令，每一段要么严格水平要么严格垂直。
+   * -------------------------------------------------------------------- */
+
+  // 同一天可能有多条变更点（当天多件进出）；当天的真值是**最后一条**。
+  function burnNodes() {
+    var out = [];
+    for (var i = 0; i < BURN.length; i++) {
+      var p = BURN[i];
+      if (out.length && out[out.length - 1].date === p.date) out[out.length - 1].value = p.value;
+      else out.push({ date: p.date, value: p.value });
+    }
+    return out;
+  }
+  // 可标注的变更点＝带 id 的那些（acquired / retired）；末尾的 today 点不标。
+  // 墨点的「钱」坐标取该日期的**最终值**，这样点一定落在画出来的线上；
+  // 它自己那一级台阶的高度（delta）放在 tooltip 与表格里说。
+  function burnMarks() {
+    var last = {};
+    BURN.forEach(function (p) { last[p.date] = p.value; });
+    var out = [];
+    BURN.forEach(function (p) {
+      if (p.event && p.event.id) {
+        out.push({ date: p.date, value: last[p.date], event: p.event });
+      }
+    });
+    return out;
+  }
+  function burnScopeText() {
+    if (!HIDDEN_COUNT) return "全库口径，不随上方筛选变化。";
+    return unlocked()
+      ? "含 " + HIDDEN_COUNT + " 件已隐藏物品——这条线比锁着时整块高一档。"
+      : "只含可见物品；另有 " + HIDDEN_COUNT + " 件已隐藏，显示后整条线会换成含它们的版本。";
+  }
+  /* ---- 时间轴的非线性映射（两段式 + 折断） ----
+   * 44 个变更点跨 11 年，但 2024 之前八年半只有 8 个，2024 起有 36 个。
+   * 线性时间轴下早年空白吃掉大半根轴，近两年全糊成一团。
+   * 所以轴分成两段，分界就是卡片流的分栏线 EARLY_FROM：
+   *   · 早段「2023 及更早」整体一段，内部不再分年，变更点等距排；
+   *     中间画一个折断符号，明说这一段不按时间比例。
+   *   · 后段 2024 起线性，年份刻度落在真位置上。
+   * 两段的长度按各自的变更点数量分配（长度 ∝ 件数，于是点的密度左右一致）。
+   * 只按数量会让早段比后段的一年还短（本数据 22% vs 29%），那就读不出
+   * 「这一段是八年」了，所以再加一条下限：早段至少相当于后段的
+   * EARLY_MIN_YEARS 年。下限生效时早段就不再严格正比于件数了，这是有意的。
+   */
+  var EARLY_MIN_YEARS = 1.2;   // 早段的长度下限，折算成后段的「年」
+  var EARLY_MIN_F = 0.12, EARLY_MAX_F = 0.55;   // 早段占全轴的比例硬边界
+
+  // 「838 天」不如「2 年 4 个月」直观；折断处标的就是这个。
+  function spanZh(days) {
+    var d = Math.round(days);
+    if (d < 45) return d + " 天";
+    var months = Math.round(d / 30.44);
+    var yrs = Math.floor(months / 12), mo = months % 12;
+    if (yrs <= 0) return mo + " 个月";
+    return yrs + " 年" + (mo ? " " + mo + " 个月" : "");
+  }
+
+  // 查表式分段线性：stops 是「时间戳 → 像素」的停靠点，之间线性插值。
+  // 返回 { T, early }：early 是早段那一块（没有早段时为 null）。
+  // 纵版横版共用同一个函数，只是 origin/len 一个给 y 一个给 x。
+  function buildTimeScale(nodes, origin, len) {
+    var i, ts = nodes.map(function (n) { return parseD(n.date); });
+    var t0 = ts[0], t1 = ts[ts.length - 1];
+    var tSplit = Date.UTC(EARLY_FROM, 0, 1);
+    var stops, early = null;
+
+    function linear() {
+      var a = t1 > t0 ? t0 : t0, b = t1 > t0 ? t1 : t0 + DAY * 30;
+      return [{ t: a, p: origin }, { t: b, p: origin + len }];
+    }
+
+    var nEarly = 0;
+    for (i = 0; i < ts.length; i++) if (ts[i] < tSplit) nEarly++;
+    // 分界不在区间内（全是新物品、或全是老物品）→ 退化成普通线性轴
+    if (nEarly === 0 || nEarly === ts.length || !(t1 > tSplit) || !(tSplit > t0)) {
+      stops = linear();
+    } else {
+      var yearsLate = (t1 - tSplit) / (DAY * 365.25);
+      var fRaw = nEarly / ts.length;
+      // 下限换算：早段 = EARLY_MIN_YEARS 年时，它占全轴的比例
+      var fMin = yearsLate > 0 ? EARLY_MIN_YEARS / (yearsLate + EARLY_MIN_YEARS) : EARLY_MAX_F;
+      var f = Math.max(fRaw, fMin);
+      f = Math.max(EARLY_MIN_F, Math.min(EARLY_MAX_F, f));
+      var LA = len * f;
+
+      // 早段：变更点等距；最后留一格走到分界线，免得末点和 2024 挤在一起
+      stops = [];
+      for (i = 0; i < nEarly; i++) {
+        stops.push({ t: ts[i], p: origin + LA * (i / nEarly) });
+      }
+      stops.push({ t: tSplit, p: origin + LA });
+      stops.push({ t: t1, p: origin + len });   // 后段线性
+      early = {
+        from: origin, to: origin + LA,
+        days: (tSplit - t0) / DAY, n: nEarly,
+        label: (EARLY_FROM - 1) + " 及更早",
+        target: "y-early",
+        value: nodes[Math.max(0, nEarly - 1)].value   // 这一段末尾的钱数，标注避开阶梯线用
+      };
+    }
+
+    function T(t) {
+      var last = stops[stops.length - 1];
+      if (!(t > stops[0].t)) return stops[0].p;
+      if (t >= last.t) return last.p;
+      var lo = 0, hi = stops.length - 1;
+      while (hi - lo > 1) {
+        var mid = (lo + hi) >> 1;
+        if (stops[mid].t <= t) lo = mid; else hi = mid;
+      }
+      var a = stops[lo], b = stops[hi];
+      return b.t === a.t ? a.p : a.p + (t - a.t) / (b.t - a.t) * (b.p - a.p);
+    }
+    return { T: T, early: early };
+  }
+
+  function markTip(m) {
+    var ev = m.event;
+    var when = ev.type === "retired" && ev.retired_on
+      ? ev.retired_on + " 淘汰（次日生效）"
+      : m.date + " 添置";
+    return {
+      value: money(m.value) + "/天",
+      label: when + "　·　" + ev.name + "　" + signedMoney(ev.delta) + "/天",
+      color: ev.delta < 0 ? "var(--accent-2)" : "var(--accent)"
+    };
+  }
+
+  // 年份刻度：卡片流里有这一年的栏就做成锚链接，点一下跳到那一年。
+  // 没有（那年没入手东西、或者被筛掉了）就还是普通刻度，不给假的可点样式。
+  // 把一段 SVG 内容包成「跳到卡片流某一栏」的链接；那一栏不存在就原样返回。
+  function secWrap(sec, inner, tipText) {
+    if (!sec || !document.getElementById(sec.id)) return inner;
+    return '<a class="yr-link" href="#' + sec.id + '" data-target="' + sec.id + '" tabindex="0">' +
+      "<title>" + esc(tipText) + "</title>" + inner + "</a>";
+  }
+  // 某个日期属于卡片流的哪一栏（早年那些年份都指向合并出来的那一栏）
+  function secOfDate(dateStr) {
+    return YEAR_SECTIONS[String(dateStr).slice(0, 4)] || null;
+  }
+
+  function yrLabel(yr, x, y, anchor, FS) {
+    var t = '<text x="' + x + '" y="' + y + '" fill="var(--muted)" font-size="' + FS +
+      '" text-anchor="' + anchor + '">' + yr + "</text>";
+    // 合并栏（如「2023 及更早」）里的每一年都锚到同一栏，tooltip 说的是那一栏
+    var sec = YEAR_SECTIONS[String(yr)];
+    return secWrap(sec, t, sec ? "跳到「" + sec.label + "」那一栏 · " + sec.n + " 件物品" : "");
+  }
+
+  function renderBurn(wrapSel, orient, box) {
+    var wrap = $(wrapSel);
+    if (!wrap) return;
+    var nodes = burnNodes();
+    if (nodes.length < 2) {
+      wrap.innerHTML = emptyState("变更点太少，还画不出这条阶梯线。");
+      return;
+    }
+    var vert = orient === "vertical";
+    var t0 = parseD(nodes[0].date), t1 = parseD(nodes[nodes.length - 1].date);
+    if (t1 <= t0) t1 = t0 + DAY * 30;
+    var vmax = niceCeil(Math.max.apply(null, nodes.map(function (n) { return n.value; })));
+
+    var W, H, mL, mR, mT, mB;
+    if (vert) {
+      W = (box && box.w) || 194;
+      H = (box && box.h) || 460;
+      mL = 40; mR = 12; mT = 42; mB = 34;
+    } else {
+      W = wrapWidth(wrap); H = 252;
+      mL = 54; mR = 18; mT = 22; mB = 48;
+    }
+    var plotW = Math.max(40, W - mL - mR), plotH = Math.max(80, H - mT - mB);
+    var FS = vert ? 10 : 11;
+    // 「钱」轴：竖版在横向，横版在纵向（向上＝更贵）。时间轴反过来。
+    function V(v) { return vert ? mL + Math.min(v, vmax) / vmax * plotW : mT + (1 - Math.min(v, vmax) / vmax) * plotH; }
+    // 时间轴是**非线性**的：长期无变动的区段被压缩过（见 buildTimeScale）。
+    // 两个方向共用同一个映射，只是 origin/len 一个给 y 一个给 x。
+    var tscale = buildTimeScale(nodes, vert ? mT : mL, vert ? plotH : plotW);
+    var T = tscale.T;
+    function PX(v, t) { return vert ? V(v) : T(t); }
+    function PY(v, t) { return vert ? T(t) : V(v); }
+    var axisEnd = vert ? mT + plotH : mL + plotW;   // 时间轴的「今天」那一端
+
+    var s = ['<svg width="' + W + '" height="' + H + '" role="img" aria-label="' +
+      (vert ? "日均花费时序阶梯线，时间自上而下，横轴是每天的钱数"
+            : "日均花费时序阶梯线，横轴是时间，纵轴是每天的钱数") +
+      "。时间轴分两段：" + (EARLY_FROM - 1) + " 及更早整体压成一段（内部不按时间比例，中间有折断符号），" +
+      EARLY_FROM + " 起按真实时间画" + '">'];
+
+    /* --- 钱轴的网格与刻度 --- */
+    var vTicks = vert ? [0, 0.5, 1] : [0, 0.25, 0.5, 0.75, 1];
+    vTicks.forEach(function (f) {
+      var v = vmax * f, p = V(v).toFixed(1);
+      if (vert) {
+        s.push('<line x1="' + p + '" y1="' + mT + '" x2="' + p + '" y2="' + (mT + plotH) +
+          '" stroke="var(--grid)" stroke-width="1"/>');
+        s.push('<text x="' + p + '" y="' + (mT - 20) + '" fill="var(--muted)" font-size="' + FS +
+          '" text-anchor="' + (f === 0 ? "start" : f === 1 ? "end" : "middle") + '">' +
+          esc(money(v, vmax >= 4 ? 0 : 2)) + "</text>");
+      } else {
+        s.push('<line x1="' + mL + '" y1="' + p + '" x2="' + (mL + plotW) + '" y2="' + p +
+          '" stroke="var(--grid)" stroke-width="1"/>');
+        s.push('<text x="' + (mL - 8) + '" y="' + (Number(p) + 4) + '" fill="var(--muted)" font-size="' + FS +
+          '" text-anchor="end">' + esc(money(v, vmax >= 4 ? 0 : 2)) + "</text>");
+      }
+    });
+    // 钱轴叫什么，写在刻度旁边（竖版顶上一行，横版左上角）
+    s.push(vert
+      ? '<text x="' + mL + '" y="' + (mT - 32) + '" fill="var(--muted)" font-size="' + FS + '">每天 →</text>'
+      : '<text x="' + (mL - 8) + '" y="' + (mT - 8) + '" fill="var(--muted)" font-size="' + FS +
+        '" text-anchor="end">每天</text>');
+
+    /* --- 时间轴：年份网格 ---
+       年份线照样走 T()，所以它落在哪儿是「真的」——只是轴本身不等距。
+       被压缩的区段里几个年份会挤到一起，所以加一条最小间距：排不下的
+       那一年干脆不画，宁可少标也不叠字（跳过了多久由断轴旁的标注负责）。*/
+    var yr0 = new Date(t0).getUTCFullYear(), yr1 = new Date(t1).getUTCFullYear();
+    var minYrPx = vert ? 13 : 34, lastYrPx = -1e9;
+    for (var yr = yr0; yr <= yr1 + 1; yr++) {
+      // 早段整体一块，内部不再分年——年份刻度从分界那一年开始
+      if (tscale.early && yr < EARLY_FROM) continue;
+      var tt = Date.UTC(yr, 0, 1);
+      if (tt < t0 || tt > t1) continue;
+      var gpn = T(tt);
+      if (gpn - lastYrPx < minYrPx) continue;
+      lastYrPx = gpn;
+      var gp = gpn.toFixed(1);
+      // 卡片流里有这一年的栏 → 刻度做成锚链接，点一下跳到那一年。
+      // 没有（那年没入手东西、或被筛掉了）就还是普通刻度，不给假的可点样式。
+      if (vert) {
+        s.push('<line x1="' + mL + '" y1="' + gp + '" x2="' + (mL + plotW) + '" y2="' + gp +
+          '" stroke="var(--grid)" stroke-width="1"/>');
+        s.push(yrLabel(yr, mL - 6, Number(gp) + 3.5, "end", FS));
+      } else {
+        s.push('<line x1="' + gp + '" y1="' + mT + '" x2="' + gp + '" y2="' + (mT + plotH) +
+          '" stroke="var(--grid)" stroke-width="1"/>');
+        s.push(yrLabel(yr, gp, mT + plotH + 16, "middle", FS));
+      }
+    }
+
+    /* --- 时间轴本体 + 一个不会看错方向的箭头 ---
+       竖版的时间轴是**纵**轴而且**朝下**跑，这跟惯例相反，所以方向要说三遍：
+       轴线末端一个实心箭头、起点标「最早」+ 日期、末端标「今天」。 */
+    if (vert) {
+      s.push('<line x1="' + mL + '" y1="' + mT + '" x2="' + mL + '" y2="' + (mT + plotH - 7) +
+        '" stroke="var(--axis)" stroke-width="1"/>');
+      s.push('<polygon points="' + mL + ',' + (mT + plotH) + ' ' + (mL - 3.5) + ',' + (mT + plotH - 8) +
+        ' ' + (mL + 3.5) + ',' + (mT + plotH - 8) + '" fill="var(--axis)"/>');
+      // 起点也可以点：跳到卡片流里最早那一栏（通常就是「2023 及更早」）
+      var startSec = secOfDate(nodes[0].date);
+      s.push(secWrap(startSec,
+        '<text x="' + (mL - 6) + '" y="' + (mT - 5) + '" fill="var(--muted)" font-size="' + FS +
+        '" text-anchor="end">最早</text>' +
+        '<text x="' + mL + '" y="' + (mT - 5) + '" fill="var(--muted)" font-size="' + FS + '">' +
+        esc(nodes[0].date) + " ↓</text>",
+        "跳到「" + (startSec ? startSec.label : "") + "」那一栏"));
+    } else {
+      s.push('<line x1="' + mL + '" y1="' + (mT + plotH) + '" x2="' + (mL + plotW - 7) + '" y2="' + (mT + plotH) +
+        '" stroke="var(--axis)" stroke-width="1"/>');
+      s.push('<polygon points="' + (mL + plotW) + ',' + (mT + plotH) + ' ' + (mL + plotW - 8) + ',' + (mT + plotH - 3.5) +
+        ' ' + (mL + plotW - 8) + ',' + (mT + plotH + 3.5) + '" fill="var(--axis)"/>');
+      var startSecH = secOfDate(nodes[0].date);
+      s.push(secWrap(startSecH,
+        '<text x="' + mL + '" y="' + (H - 8) + '" fill="var(--muted)" font-size="' + FS + '">' +
+        esc(nodes[0].date) + " →</text>",
+        "跳到「" + (startSecH ? startSecH.label : "") + "」那一栏"));
+    }
+
+    /* --- 早段那一块：底纹 + 折断符号 + 段名 ---
+       这一段内部不按时间比例，「平段有多长＝多久没变化」在这里不成立，
+       所以补三样东西说清楚：整段淡底纹（这一块是压过的）、轴线中间一个
+       折断符号（底色挖断一小截 + 双斜线）、以及段名「2023 及更早 · 8 年 7 个月」。
+       符号自己一条 path，绝不混进阶梯路径。 */
+    var brkFS = Math.max(9, FS - 1);
+    var early = tscale.early;
+    if (early) {
+      var eMid = (early.from + early.to) / 2;
+      var eSpan = spanZh(early.days);
+      var eTitle = "<title>" + esc(early.label + "：" + eSpan + "、" + early.n +
+        " 次变更，压成一段画，内部不按时间比例") + "</title>";
+      // 整段淡底纹：一眼看出「这一块的时间不是按比例的」
+      var eBand = vert
+        ? '<rect x="' + mL + '" y="' + early.from.toFixed(1) + '" width="' + plotW +
+          '" height="' + Math.max(0, early.to - early.from).toFixed(1) + '"'
+        : '<rect x="' + early.from.toFixed(1) + '" y="' + mT + '" width="' +
+          Math.max(0, early.to - early.from).toFixed(1) + '" height="' + plotH + '"';
+      s.push(eBand + ' fill="var(--grid)" fill-opacity="0.5">' + eTitle + "</rect>");
+
+      // 轴线中间的折断：先用底色把轴挖断一小截，再压两道斜线
+      if (vert) {
+        s.push('<rect x="' + (mL - 4) + '" y="' + (eMid - 6).toFixed(1) +
+          '" width="8" height="12" fill="var(--surface)"/>');
+        s.push('<path d="M' + (mL - 5) + ' ' + (eMid + 5.5).toFixed(1) + ' L' + (mL + 5) + ' ' + (eMid - 0.5).toFixed(1) +
+          ' M' + (mL - 5) + ' ' + (eMid + 0.5).toFixed(1) + ' L' + (mL + 5) + ' ' + (eMid - 5.5).toFixed(1) +
+          '" fill="none" stroke="var(--axis)" stroke-width="1.2"/>');
+      } else {
+        var yaE = mT + plotH;
+        s.push('<rect x="' + (eMid - 6).toFixed(1) + '" y="' + (yaE - 4) +
+          '" width="12" height="8" fill="var(--surface)"/>');
+        s.push('<path d="M' + (eMid - 5.5).toFixed(1) + ' ' + (yaE + 5) + ' L' + (eMid - 0.5).toFixed(1) + ' ' + (yaE - 5) +
+          ' M' + (eMid + 0.5).toFixed(1) + ' ' + (yaE + 5) + ' L' + (eMid + 5.5).toFixed(1) + ' ' + (yaE - 5) +
+          '" fill="none" stroke="var(--axis)" stroke-width="1.2"/>');
+      }
+
+      // 段名：和卡片流里那一栏同名，并且可以点过去（那一栏存在时）
+      var eSecRef = { id: early.target, label: early.label };
+      var eLabel = function (x, y, anchor, txt) {
+        return secWrap(eSecRef,
+          '<text x="' + x + '" y="' + y + '" fill="var(--muted)" font-size="' + brkFS +
+          '" text-anchor="' + anchor + '">' + esc(txt) + "</text>",
+          "跳到「" + early.label + "」那一栏");
+      };
+      if (vert) {
+        // 标注放阶梯线左右空间大的那一侧
+        var evx = V(early.value);
+        var roomR = mL + plotW - (evx + 7), roomL = (evx - 7) - mL;
+        var eAnchor = roomR >= roomL ? "start" : "end";
+        var eRoom = Math.max(roomR, roomL);
+        var ex0 = eAnchor === "start" ? evx + 7 : evx - 7;
+        var eTxt = textPx(early.label, brkFS) <= eRoom ? early.label : null;
+        if (eTxt) {
+          s.push(eLabel(ex0.toFixed(1), (eMid - 2).toFixed(1), eAnchor, eTxt));
+          var sub = "· " + eSpan;
+          if (textPx(sub, brkFS) <= eRoom) {
+            s.push('<text x="' + ex0.toFixed(1) + '" y="' + (eMid + 10).toFixed(1) +
+              '" fill="var(--muted)" font-size="' + brkFS + '" text-anchor="' + eAnchor + '">' +
+              esc(sub) + "</text>");
+          }
+        }
+      } else {
+        var eOneLine = early.label + " · " + eSpan;
+        var ew = textPx(eOneLine, brkFS);
+        var ecx = Math.min(Math.max(eMid, mL + ew / 2), mL + plotW - ew / 2);
+        // 阶梯线贴着图顶时，标注改排到图底，免得压在线上
+        var eBottom = V(early.value) < mT + 46;
+        s.push(eLabel(ecx.toFixed(1), eBottom ? (mT + plotH - 16) : (mT + 13), "middle", eOneLine));
+      }
+    }
+
+    /* --- 阶梯线本体（方角）+ 10% 淡墨面积衬量感 --- */
+    var d = ["M" + PX(0, t0).toFixed(1) + " " + PY(0, t0).toFixed(1)];
+    d.push((vert ? "H" : "V") + V(nodes[0].value).toFixed(1));      // 第一件东西进来，从 0 抬起
+    for (var i = 1; i < nodes.length; i++) {
+      d.push((vert ? "V" : "H") + T(parseD(nodes[i].date)).toFixed(1)); // 值不变，时间前进
+      d.push((vert ? "H" : "V") + V(nodes[i].value).toFixed(1));        // 时间不动，跳一级
+    }
+    var stepPath = d.join(" ");
+    s.push('<path d="' + stepPath + " " + (vert ? "H" : "V") + V(0).toFixed(1) +
+      ' Z" fill="var(--accent)" fill-opacity="0.10" stroke="none"/>');
+    s.push('<path d="' + stepPath + '" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="miter" stroke-linecap="butt"/>');
+
+    /* --- 末端直接标注：今天的值 --- */
+    var lastNode = nodes[nodes.length - 1];
+    var ex = PX(lastNode.value, t1), ey = PY(lastNode.value, t1);
+    s.push('<circle cx="' + ex.toFixed(1) + '" cy="' + ey.toFixed(1) +
+      '" r="4" fill="var(--accent)" stroke="var(--surface)" stroke-width="2"/>');
+    if (vert) {
+      // 两行分开写，免得金额一长就和日期撞上（侧栏只有 ~156px 可用）
+      s.push('<text x="' + (mL + plotW) + '" y="' + (mT + plotH + 15) + '" fill="var(--ink-2)" font-size="' + FS +
+        '" text-anchor="end">今天 ' + esc(money(lastNode.value)) + "/天</text>");
+      s.push('<text x="' + mL + '" y="' + (mT + plotH + 28) + '" fill="var(--muted)" font-size="' + FS + '">↓ ' +
+        esc(TODAY) + "</text>");
+    } else {
+      s.push('<text x="' + (mL + plotW) + '" y="' + (H - 8) + '" fill="var(--ink-2)" font-size="' + FS +
+        '" text-anchor="end">今天 ' + esc(TODAY) + "</text>");
+      s.push('<text x="' + (ex - 7).toFixed(1) + '" y="' + (ey - 9).toFixed(1) + '" fill="var(--ink-2)" font-size="' + FS +
+        '" text-anchor="end">' + esc(money(lastNode.value)) + "/天</text>");
+    }
+
+    /* --- 变更点：每一级台阶都能归到某一件物品 --- */
+    var marks = burnMarks();
+    // 只给最高的几级台阶直接标注（名字＋±金额）；其余靠 hover / 焦点和
+    // 折叠区里的「变更点表」——每个点都标就成了噪声。
+    // 竖版现在与整页等高，高度富余时就多标几个：每 150px 给一个名额，
+    // 上限 10 —— 再多就又变成「每个点都标」的噪声了。横版宽度固定，仍是 3 个。
+    var labelBudget = vert ? Math.max(2, Math.min(10, Math.floor(plotH / 150))) : 3;
+    var bigSet = {};
+    marks.slice().sort(function (a, b) {
+      return Math.abs(b.event.delta) - Math.abs(a.event.delta);
+    }).slice(0, labelBudget).forEach(function (m) { bigSet[m.event.id + "@" + m.date] = true; });
+    var lastLabelY = -1e9;   // 竖版：两条标注离太近就放弃后一条
+
+    marks.forEach(function (m, k) {
+      var up = m.event.delta >= 0;
+      var mx = PX(m.value, parseD(m.date)), my = PY(m.value, parseD(m.date));
+      var color = up ? "var(--accent)" : "var(--accent-2)";
+      var t = markTip(m);
+      var aria = t.value + "，" + t.label;
+      var dotId = "bpd-" + (vert ? "v" : "h") + "-" + k;
+      // 添置＝实心暖冷两色里的冷色，淘汰＝描边 + 暖色：形状与色相两个通道，
+      // 不靠颜色单独承担正负。外面再套一圈 2px 底色环，压线也看得清。
+      s.push('<circle class="bp-dot" id="' + dotId + '" cx="' + mx.toFixed(1) + '" cy="' + my.toFixed(1) +
+        '" r="4" fill="' + (up ? color : "var(--surface)") + '" stroke="' +
+        (up ? "var(--surface)" : color) + '" stroke-width="2"/>');
+      // 直接标注：挑左右（竖版）/ 上下（横版）空间大的一侧放，放不下就不放
+      if (bigSet[m.event.id + "@" + m.date]) {
+        var lbl, tx, ty, anchor;
+        if (vert) {
+          var roomR = mL + plotW - mx, roomL = mx - mL;
+          anchor = roomR >= roomL ? "start" : "end";
+          var room = Math.max(roomR, roomL) - 8;
+          var money_s = signedMoney(m.event.delta);
+          var nameRoom = room - textPx(money_s + " ", FS);
+          if (nameRoom >= 30) {
+            lbl = truncate(m.event.name, nameRoom, FS) + " " + money_s;
+          } else if (room >= textPx(money_s, FS)) {
+            lbl = money_s;
+          }
+          tx = anchor === "start" ? mx + 8 : mx - 8;
+          ty = my - 7;
+        } else {
+          anchor = "middle";
+          lbl = truncate(m.event.name, 150, FS) + " " + signedMoney(m.event.delta);
+          tx = Math.min(Math.max(mx, mL + textPx(lbl, FS) / 2), mL + plotW - textPx(lbl, FS) / 2);
+          ty = up ? my - 10 : my + 17;
+        }
+        if (vert && lbl) {
+          if (ty - lastLabelY < 12) lbl = null; else lastLabelY = ty;
+        }
+        if (lbl) {
+          s.push('<text x="' + tx.toFixed(1) + '" y="' + ty.toFixed(1) +
+            '" fill="var(--ink-2)" font-size="' + FS + '" text-anchor="' + anchor + '">' + esc(lbl) + "</text>");
+        }
+      }
+      // 命中区：直径 26px，远大于 8px 的墨点；键盘可聚焦，回车打开详情抽屉
+      s.push('<circle class="bp-hit" cx="' + mx.toFixed(1) + '" cy="' + my.toFixed(1) + '" r="13"' +
+        ' data-id="' + esc(m.event.id) + '" data-dot="' + dotId +
+        '" data-val="' + esc(t.value) + '" data-label="' + esc(t.label) + '" data-color="' + esc(t.color) + '"' +
+        ' tabindex="0" role="button" aria-label="' + esc(aria + "，按回车看这件物品的详情") + '">' +
+        "<title>" + esc(aria) + "</title></circle>");
+    });
+
+    s.push("</svg>");
+    wrap.innerHTML = s.join("");
+
+    var tip = ensureTip(wrap);
+    Array.prototype.forEach.call(wrap.querySelectorAll(".bp-hit"), function (hit) {
+      var dot = wrap.querySelector("#" + hit.getAttribute("data-dot"));
+      function show() {
+        var r = hit.getBoundingClientRect(), wr = wrap.getBoundingClientRect();
+        if (dot) { dot.classList.add("on"); dot.setAttribute("r", "5.5"); }
+        showTip(wrap, tip, r.left - wr.left + r.width / 2, r.top - wr.top + 6,
+          hit.getAttribute("data-val"), hit.getAttribute("data-label"), hit.getAttribute("data-color"));
+      }
+      function hide() {
+        if (dot) { dot.classList.remove("on"); dot.setAttribute("r", "4"); }
+        hideTip(tip);
+      }
+      function go() {
+        var id = hit.getAttribute("data-id");
+        if (byId(id)) openDetail(id);
+      }
+      hit.addEventListener("pointerenter", show);
+      hit.addEventListener("pointermove", show);
+      hit.addEventListener("pointerleave", hide);
+      hit.addEventListener("focus", show);
+      hit.addEventListener("blur", hide);
+      hit.addEventListener("click", go);
+      hit.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); }
+      });
+    });
+  }
+
+  // 单系列，不需要系列图例；要解释的是墨点的形状和「台阶」这件事本身。
+  function burnLegendHTML() {
+    return [
+      '<span class="key"><span class="sw dot" style="background:var(--accent)"></span>添置：抬一级</span>',
+      '<span class="key"><span class="sw dot hollow" style="color:var(--accent-2)"></span>淘汰：降一级</span>',
+      '<span class="key"><span class="sw" style="background:var(--accent);opacity:.28"></span>台阶的平段＝这段时间里没有变化（不是插值）</span>',
+      '<span class="key"><svg width="13" height="11" aria-hidden="true" focusable="false">' +
+        '<path d="M1 8.5 L11 4 M1 7 L11 2.5" fill="none" stroke="var(--axis)" stroke-width="1.2"/></svg>' +
+        '折断＝时间轴在这里换段：底纹那一块是「' + (EARLY_FROM - 1) + ' 及更早」，' +
+        '整体压成一段、内部不按时间比例也不再分年；' + EARLY_FROM + ' 起才是真实比例。' +
+        '两段的长度按各自的变更点数量分配</span>',
+      '<span class="key">点变更点＝打开那件物品的详情</span>'
+    ].join("");
+  }
+
+  // 宽屏＝竖版（fixed 在左侧留白里），窄屏＝横版（文档流里）。
+  // 两块永远只渲染其中一块，另一块清空，省掉一半的 SVG 和监听。
+  // 与 CSS 里 .burn-gutter 的那条 @media 逐字一致，否则会出现两版都不显示
+  var GUTTER_MQ = window.matchMedia ? window.matchMedia("(min-width: 1440px) and (min-height: 560px)") : null;
+  function gutterActive() { return !!(GUTTER_MQ && GUTTER_MQ.matches); }
+
+  function renderBurnAll() {
+    var scope = burnScopeText();
+    $("#burn-flow-scope").textContent = scope;
+    if (gutterActive()) {
+      $("#burn-flow").innerHTML = "";
+      $("#burn-legend").innerHTML = "";
+      var host = $("#burn-gutter-chart");
+      var h = Math.max(320, Math.min(Math.round(window.innerHeight - 230), 640));
+      renderBurn("#burn-gutter-chart", "vertical", { w: host.clientWidth || 194, h: h });
+    } else {
+      $("#burn-gutter-chart").innerHTML = "";
+      renderBurn("#burn-flow", "horizontal", null);
+      $("#burn-legend").innerHTML = burnLegendHTML();
+    }
+  }
+
+  // 曲线的表格孪生：每个变更点一行，值不靠 hover 才能拿到。
+  function renderBurnTable() {
+    var rows = BURN.filter(function (p) { return p.event && p.event.id; });
+    if (!rows.length) { $("#stat-burn").innerHTML = emptyState("还没有变更点。"); return; }
+    var body = rows.slice().reverse().map(function (p) {
+      var ev = p.event;
+      var when = ev.type === "retired" ? (ev.retired_on || p.date) : p.date;
+      return '<tr data-id="' + esc(ev.id) + '" style="cursor:pointer">' +
+        '<td class="num">' + esc(when) + "</td>" +
+        "<td>" + (ev.type === "retired" ? "淘汰" : "添置") + "</td>" +
+        "<td>" + esc(ev.name) + "</td>" +
+        '<td class="num">' + esc(signedMoney(ev.delta)) + "</td>" +
+        '<td class="num up">' + esc(money(p.value)) + "</td></tr>";
+    }).join("");
+    $("#stat-burn").innerHTML = '<div class="bp-table-scroll"><table class="plain"><thead><tr>' +
+      '<th class="num">日期</th><th>事件</th><th>物品</th>' +
+      '<th class="num">这一级台阶</th><th class="num">变更后日均</th>' +
+      "</tr></thead><tbody>" + body + "</tbody></table></div>";
+  }
+
+  /* ---------------- §B 服役时间线（甘特图） ---------------- */
+  function renderGantt(items) {
+    var wrap = $("#gantt");
+    if (!items.length) { wrap.innerHTML = emptyState("当前筛选下没有物品。"); $("#gantt-legend").innerHTML = ""; return; }
+
+    var rows = items.slice().sort(function (a, b) { return parseD(a.acquired) - parseD(b.acquired); });
+    var W = wrapWidth(wrap);
+    // 物品名跟在条形**末端右侧**：淘汰的贴着淘汰点，在用的一律到「今天」那条线，
+    // 于是在用的那批名字天然对齐成一列。名字不再占左侧固定栏，条形能画得更长。
+    var GFS = 12;
+    function gLabel(it) { return (it.hidden ? "🔒" : catIcon(it.category)) + " " + it.name; }
+    // 右边距要给「今天」那一列的名字留位：在用物品都结束在 t1，是最挤的一批。
+    // 淘汰的结束得早，留白只会更多，所以按这一批算就够。
+    // 在用的名字全挤在「今天」那一列，一个特别长的名字会把整条右边距撑开、
+    // 把所有条形压短。所以在用的名字有长度上限，超了就截断（全名在 tooltip
+    // 和详情里）。已淘汰的贴在各自的淘汰点上，右边一般空着，不设上限。
+    var GLABEL_MAX = Math.min(200, Math.round(W * 0.26));
+    var liveRows = rows.filter(function (i) { return i.status === "in_use"; });
+    var needR = Math.min(GLABEL_MAX, (liveRows.length ? liveRows : rows).reduce(function (m, i) {
+      return Math.max(m, textPx(gLabel(i), GFS));
+    }, 0)) + 18;
+    var L = 14, R = Math.max(60, Math.min(needR, Math.round(W * 0.45)));
+    var T = 28, rowH = 26, barH = 10, B = 12;
+    var H = T + rows.length * rowH + B;
+    var t0 = Math.min.apply(null, rows.map(function (i) { return parseD(i.acquired); }));
+    var t1 = Math.max.apply(null, rows.map(function (i) { return parseD(itemEnd(i)); }));
+    if (t1 <= t0) t1 = t0 + DAY * 30;
+    var pad = (t1 - t0) * 0.02;
+    t0 -= pad; t1 += pad;
+    function x(t) { return L + (t - t0) / (t1 - t0) * (W - L - R); }
+
+    var s = ['<svg width="' + W + '" height="' + H + '" role="img" aria-label="服役时间线甘特图">'];
+    // 年份网格：实线发丝线，一档灰
+    var y0 = new Date(t0).getUTCFullYear(), y1 = new Date(t1).getUTCFullYear();
+    // 窄屏上年份标签会挤成一团：算一下每年占多少像素，不够就隔一格标一次。
+    var pxPerYear = (W - L - R) / Math.max((t1 - t0) / (DAY * 365), 1);
+    var yrStep = pxPerYear < 34 ? Math.ceil(34 / Math.max(pxPerYear, 1)) : 1;
+    for (var yr = y0; yr <= y1 + 1; yr++) {
+      var tt = Date.UTC(yr, 0, 1);
+      if (tt < t0 || tt > t1) continue;
+      var gx = x(tt).toFixed(1);
+      s.push('<line x1="' + gx + '" y1="' + (T - 8) + '" x2="' + gx + '" y2="' + (H - B) + '" stroke="var(--grid)" stroke-width="1"/>');
+      if ((yr - y0) % yrStep === 0) {
+        s.push('<text x="' + gx + '" y="' + (T - 12) + '" fill="var(--muted)" font-size="11" text-anchor="middle">' + yr + "</text>");
+      }
+    }
+    // 今天
+    var tx = x(parseD(TODAY)).toFixed(1);
+    s.push('<line x1="' + tx + '" y1="' + (T - 8) + '" x2="' + tx + '" y2="' + (H - B) + '" stroke="var(--axis)" stroke-width="1"/>');
+    s.push('<text x="' + tx + '" y="' + (H - 0.5) + '" fill="var(--muted)" font-size="11" text-anchor="end">今天</text>');
+
+    rows.forEach(function (it, i) {
+      var yTop = T + i * rowH + (rowH - barH) / 2;
+      var xa = x(parseD(it.acquired)), xb = x(parseD(itemEnd(it)));
+      var w = Math.max(4, xb - xa);
+      var color = catColor(it.category);
+      var live = it.status === "in_use";
+      var tipText = (it.hidden ? "🔒 " : "") + it.name + " · " + it.acquired + " → " + (it.retired || "至今") +
+        " · " + it.days_held + " 天 · " + money(it.daily_cost) + "/天 · " +
+        (live ? "在用" : "已淘汰" + (it.retire_reason ? "（" + it.retire_reason + "）" : ""));
+      s.push('<rect class="gbar" data-id="' + esc(it.id) + '" data-tip="' + esc(tipText) +
+        '" data-color="' + esc(color) + '" x="' + xa.toFixed(1) + '" y="' + yTop + '" width="' + w.toFixed(1) +
+        '" height="' + barH + '" rx="3" fill="' + esc(color) + '"' +
+        (live ? "" : ' fill-opacity="0.14" stroke="' + esc(color) + '" stroke-width="1.5"') +
+        ' tabindex="0" role="button" aria-label="' + esc(tipText) + '"><title>' + esc(tipText) + "</title></rect>");
+      // 名字紧贴条形末端。已淘汰的贴在淘汰那一点上，在用的都贴在「今天」，
+      // 所以在用的名字自然对齐。放不下就截断（全名在 tooltip 和详情里）。
+      var lx = xb + 8, room = W - 4 - lx;
+      if (live) room = Math.min(room, GLABEL_MAX);   // 在用的那一列统一封顶
+      var lbl = truncate(gLabel(it), room, GFS);
+      if (lbl && lbl !== "…") {
+        s.push('<text x="' + lx.toFixed(1) + '" y="' + (yTop + barH / 2 + 4).toFixed(1) +
+          '" fill="' + (live ? "var(--ink-2)" : "var(--muted)") + '" font-size="' + GFS +
+          '" text-anchor="start" pointer-events="none">' + esc(lbl) + "</text>");
+      }
+    });
+    s.push("</svg>");
+    wrap.innerHTML = s.join("");
+
+    var tip = ensureTip(wrap);
+    Array.prototype.forEach.call(wrap.querySelectorAll(".gbar"), function (bar) {
+      function show(ev) {
+        var r = bar.getBoundingClientRect(), wr = wrap.getBoundingClientRect();
+        var px = (ev && ev.clientX ? ev.clientX : r.left + r.width / 2) - wr.left;
+        showTip(wrap, tip, px, r.top - wr.top, bar.getAttribute("data-tip").split(" · ")[0],
+          bar.getAttribute("data-tip").split(" · ").slice(1).join(" · "), bar.getAttribute("data-color"));
+      }
+      bar.addEventListener("pointermove", show);
+      bar.addEventListener("pointerleave", function () { hideTip(tip); });
+      bar.addEventListener("focus", show);
+      bar.addEventListener("blur", function () { hideTip(tip); });
+      bar.addEventListener("click", function () { openDetail(bar.getAttribute("data-id")); });
+      bar.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openDetail(bar.getAttribute("data-id")); }
+      });
+    });
+
+    var present = [];
+    items.forEach(function (i) { if (present.indexOf(i.category) < 0) present.push(i.category); });
+    var keys = present.map(function (c) {
+      return '<span class="key"><span class="sw" style="background:' + esc(catColor(c)) + '"></span>' +
+        esc(catIcon(c) + " " + c) + "</span>";
+    });
+    keys.push('<span class="key"><span class="sw" style="background:var(--axis)"></span>实心＝在用</span>');
+    keys.push('<span class="key"><span class="sw hollow" style="color:var(--axis)"></span>描边＝已淘汰</span>');
+    if (unlocked() && HIDDEN_COUNT > 0) keys.push('<span class="key">🔒＝已隐藏物品</span>');
+    $("#gantt-legend").innerHTML = keys.join("");
+  }
+
+  /* ---------------- 通用横向柱状图（单系列＝单色） ---------------- */
+  function renderBars(wrapSel, rows, opts) {
+    var wrap = $(wrapSel);
+    opts = opts || {};
+    if (!rows.length || rows.every(function (r) { return !r.value; })) {
+      wrap.innerHTML = emptyState(opts.empty || "暂无数据。");
+      return;
+    }
+    var W = wrapWidth(wrap);
+    var L = Math.min(110, Math.max(56, Math.round(W * 0.28)));
+    var VR = 52, barH = 10, rowH = 26, T = 2;
+    var H = T + rows.length * rowH + 4;
+    var max = Math.max.apply(null, rows.map(function (r) { return r.value; })) || 1;
+    var plot = Math.max(20, W - L - VR);
+    var s = ['<svg width="' + W + '" height="' + H + '" role="img" aria-label="' + esc(opts.label || "柱状图") + '">'];
+    rows.forEach(function (r, i) {
+      var y = T + i * rowH + (rowH - barH) / 2;
+      var w = Math.max(2, r.value / max * plot);
+      s.push('<text x="' + (L - 10) + '" y="' + (y + barH / 2 + 4).toFixed(1) + '" fill="var(--muted)" font-size="12" text-anchor="end">' +
+        esc(truncate(r.label, L - 10, 12)) + "</text>");
+      s.push('<rect class="hbar" data-tip="' + esc(r.label) + '" data-val="' + esc(r.display || String(r.value)) +
+        '" x="' + L + '" y="' + y + '" width="' + w.toFixed(1) + '" height="' + barH + '" rx="3" fill="var(--accent)"/>');
+      s.push('<text x="' + (L + w + 10).toFixed(1) + '" y="' + (y + barH / 2 + 4).toFixed(1) + '" fill="var(--ink-2)" font-size="12">' +
+        esc(r.display || String(r.value)) + "</text>");
+    });
+    s.push("</svg>");
+    wrap.innerHTML = s.join("");
+    var tip = ensureTip(wrap);
+    Array.prototype.forEach.call(wrap.querySelectorAll(".hbar"), function (bar) {
+      bar.addEventListener("pointermove", function (ev) {
+        var r = bar.getBoundingClientRect(), wr = wrap.getBoundingClientRect();
+        showTip(wrap, tip, ev.clientX - wr.left, r.top - wr.top, bar.getAttribute("data-val"),
+          bar.getAttribute("data-tip"), "var(--accent)");
+      });
+      bar.addEventListener("pointerleave", function () { hideTip(tip); });
+    });
+  }
+
+  /* ---------------- §E 聚合统计与榜单 ---------------- */
+  function renderStats(items) {
+    // 总账：一行文字，不做成 KPI 方阵。跟随筛选，所以自己算，不用 TOTALS。
+    var spend = 0, resale = 0, net = 0;
+    items.forEach(function (it) {
+      spend += it.price || 0;
+      resale += it.resale || 0;
+      net += it.net_cost != null ? it.net_cost : (it.price || 0) - (it.resale || 0);
+    });
+    var ledger = [
+      "累计投入 <b>" + esc(money(spend)) + "</b>",
+      "二手回收 <b>" + esc(money(resale)) + "</b>",
+      "净支出 <b>" + esc(money(net)) + "</b>",
+      "共 <b>" + items.length + "</b> 件"
+    ];
+    var priv = items.filter(function (i) { return i.hidden; }).length;
+    if (priv) ledger.push("<span class=\"scope\">其中 <b>" + priv + "</b> 件是已隐藏物品</span>");
+    else if (HIDDEN_COUNT > 0 && !unlocked()) ledger.push("<span class=\"scope\">不含 <b>" + HIDDEN_COUNT + "</b> 件已隐藏物品</span>");
+    $("#stat-ledger").innerHTML = ledger.map(function (t) { return "<span>" + t + "</span>"; }).join("");
+
+    // 分类统计
+    var groups = {};
+    items.forEach(function (it) {
+      if (!groups[it.category]) groups[it.category] = [];
+      groups[it.category].push(it);
+    });
+    var catKeys = Object.keys(groups).sort(function (a, b) { return groups[b].length - groups[a].length; });
+    if (!catKeys.length) {
+      $("#stat-cat").innerHTML = emptyState("当前筛选下没有物品。");
+    } else {
+      var rowsHTML = catKeys.map(function (c) {
+        var g = groups[c];
+        var avgDays = g.reduce(function (s, i) { return s + i.days_held; }, 0) / g.length;
+        var vals = g.map(function (i) { return i.daily_cost; }).filter(function (v) { return v != null; });
+        var avgDaily = vals.length ? vals.reduce(function (s, v) { return s + v; }, 0) / vals.length : null;
+        return "<tr><td><span class=\"chip\"><span class=\"dot\" style=\"background:" + esc(catColor(c)) + '"></span>' +
+          esc(catIcon(c) + " " + c) + "</span></td>" +
+          '<td class="num">' + g.length + "</td>" +
+          '<td class="num">' + num(avgDays, 0) + "</td>" +
+          '<td class="num">' + esc(money(avgDaily)) + "</td></tr>";
+      }).join("");
+      $("#stat-cat").innerHTML =
+        '<table class="plain"><thead><tr><th>分类</th><th class="num">件数</th>' +
+        '<th class="num">平均服役天数</th><th class="num">平均日均</th></tr></thead><tbody>' +
+        rowsHTML + "</tbody></table>";
+    }
+
+    // 日均成本分布：对数档位分箱，比等宽分箱更贴合成本本身的对数分布。
+    // 首桶「≤ ¥0」只在真有净成本 ≤ 0 的物品（赠品/已回本卖出）时才出现。
+    // 日均成本 vs 服役天数（双对数散点）：跟随筛选，与本折叠区其它读数同口径
+    renderScatter("#scatter-cost", items);
+
+    var withCost = items.filter(function (i) { return i.daily_cost != null; });
+    var zeroOrLess = withCost.filter(function (i) { return i.daily_cost <= 0; }).length;
+    var dailyRows = zeroOrLess ? [{ label: "≤ ¥0", value: zeroOrLess, display: zeroOrLess + " 件" }] : [];
+    var bounds = [0.1, 0.2, 0.5, 1, 2, 5, 10];
+    var boundLabels = ["≤ ¥0.1", "¥0.1–0.2", "¥0.2–0.5", "¥0.5–1", "¥1–2", "¥2–5", "¥5–10", "> ¥10"];
+    boundLabels.forEach(function (label, i) {
+      var lo = i === 0 ? 0 : bounds[i - 1];
+      var hi = i < bounds.length ? bounds[i] : Infinity;
+      var n = withCost.filter(function (it) { return it.daily_cost > lo && it.daily_cost <= hi; }).length;
+      dailyRows.push({ label: label, value: n, display: n + " 件" });
+    });
+    renderBars("#chart-daily", dailyRows, { label: "日均成本分布", empty: "当前筛选下没有物品。" });
+    var costVals = withCost.map(function (i) { return i.daily_cost; }).sort(function (a, b) { return a - b; });
+    function quantile(sorted, q) {
+      if (!sorted.length) return null;
+      var pos = (sorted.length - 1) * q, base = Math.floor(pos), rest = pos - base;
+      return sorted[base + 1] !== undefined ? sorted[base] + rest * (sorted[base + 1] - sorted[base]) : sorted[base];
+    }
+    $("#chart-daily-note").textContent = costVals.length
+      ? "中位数 " + money(quantile(costVals, 0.5)) + " · 四分位 " + money(quantile(costVals, 0.25)) +
+        "–" + money(quantile(costVals, 0.75)) + " · 共 " + costVals.length + " 件"
+      : "";
+
+    // 使用频率分布：按 uses_per_year 分桶（每天级 / 每周级 / 每月级 / 每年级）
+    var freqRows = PERIOD_ORDER.map(function (p) {
+      var n = items.filter(function (i) { return useBucket(i) === p; }).length;
+      return { label: periodLabel(p) + "级", value: n, display: n + " 件" };
+    }).filter(function (r) { return r.value > 0; });
+    renderBars("#chart-freq", freqRows, { label: "使用频率分布", empty: "当前筛选下没有物品。" });
+
+    // 淘汰原因分布
+    var reasonRows = REASONS.map(function (r) {
+      var n = items.filter(function (i) { return i.retire_reason === r; }).length;
+      return { label: r, value: n, display: n + " 件" };
+    }).filter(function (r) { return r.value > 0; });
+    renderBars("#chart-reason", reasonRows, { label: "淘汰原因分布", empty: "当前筛选下还没有淘汰记录。" });
+
+    // 冷落榜：两周一次都用不到（uses_per_year <= COLD_MAX_UPY），按**次均**成本降序。
+    // 不用日均：放得越久日均越低，一件吃灰五年的东西日均会显得很「值」。
+    // 26 是按新口径（使用周期 × 使用次数）定的：旧的 12 来自已经删掉的五档频率枚举，
+    // 在新口径下会把「每月 2 次」「每年 20 次」这类明显吃灰的东西挡在榜外。
+    var coldList = items.filter(function (i) {
+      return (i.uses_per_year || 0) <= COLD_MAX_UPY && i.cost_per_use != null;
+    }).sort(function (a, b) { return b.cost_per_use - a.cost_per_use; }).slice(0, 5);
+    $("#rank-cold").innerHTML = coldList.length
+      ? rankHTML(coldList, function (i) { return money(i.cost_per_use) + "/次"; }, function (i) { return useLabel(i); })
+      : emptyState("当前筛选下没有低频物品。");
+
+    var valueList = items.filter(function (i) { return i.daily_cost != null; })
+      .sort(function (a, b) { return a.daily_cost - b.daily_cost; }).slice(0, 5);
+    $("#rank-value").innerHTML = valueList.length
+      ? rankHTML(valueList, function (i) { return money(i.daily_cost) + "/天"; }, function (i) { return i.days_held + " 天"; })
+      : emptyState("当前筛选下没有物品。");
+
+    renderBurnTable();
+  }
+  var COLD_MAX_UPY = 26;   // 冷落榜的频率门槛：一年 26 次 ≈ 两周一次
+  function rankHTML(list, valueFn, subFn) {
+    return '<ol class="rank">' + list.map(function (it, i) {
+      return '<li data-id="' + esc(it.id) + '" style="cursor:pointer">' +
+        '<span class="idx">' + (i + 1) + "</span>" +
+        '<span class="nm">' + esc((it.hidden ? "🔒 " : catIcon(it.category) + " ") + it.name) +
+        ' <span class="tag">' + esc(subFn(it)) + "</span></span>" +
+        '<span class="v">' + esc(valueFn(it)) + "</span></li>";
+    }).join("") + "</ol>";
+  }
+
+  /* ---------------- §D 物品卡片流 / 表格 ---------------- */
+  // 回本进度：净成本 ÷ 该分类回本线 = 需要服役多少天
+  function payback(it) {
+    var net = it.net_cost;
+    if (net == null) return null;
+    var worth = worthLine(it.category);
+    if (!(net > 0)) return { free: true };
+    var need = Math.ceil(net / worth);
+    return {
+      free: false, need: need, worth: worth,
+      pct: Math.max(0, Math.min(1, it.days_held / need)),
+      left: need - it.days_held,
+      date: it.payback_date || fmtD(parseD(it.acquired) + need * DAY)
+    };
+  }
+  function cardHTML(it) {
+    var live = it.status === "in_use";
+    // 主数字永远是日均成本——价格不再是秘密，不需要「锁着时改用服役天数」那套了。
+    var hero = esc(money(it.daily_cost));
+    var aside = (live ? "已服役 " : "服役 ") + esc(num(it.days_held, 0)) + " 天";
+
+    // 回本进度：一律给条，回本了也给（满格），文案压在条里，和日期同一行。
+    // 已淘汰但没回本的单独换一个颜色——那是「没用够本就退役了」，
+    // 和「还在慢慢回本」是两回事，不该长得一样。
+    var tail, pb = payback(it), pct, label, cls = "";
+    var why = (!live && it.retire_reason) ? "(" + it.retire_reason + ") " : "";
+    if (pb && pb.free) {
+      pct = 1; label = "净成本 0 · 不用回本";
+    } else if (pb && pb.left > 0) {
+      pct = pb.pct;
+      label = live
+        ? "回本 " + Math.round(pb.pct * 100) + "% · 还需 " + num(pb.left, 0) + " 天"
+        : "淘汰时 " + Math.round(pb.pct * 100) + "% · 差 " + num(pb.left, 0) + " 天";
+      if (!live) cls = " unpaid";
+    } else if (pb) {
+      pct = 1; label = "已回本 · " + pb.date;
+    } else {
+      pct = null; label = "估算已使用 " + num(usesOf(it), 0) + " 次";
+    }
+    label = why + label;
+    if (pct == null) {
+      tail = '<span class="gc-note">' + esc(label) + "</span>";
+    } else {
+      var barTip = label + (pb && pb.worth != null ? "（回本线 " + money(pb.worth) + "/天）" : "");
+      tail = '<span class="gc-bar' + cls + '" title="' + esc(barTip) + '"><i style="width:' +
+        (pct * 100).toFixed(1) + '%"></i><b>' + esc(label) + "</b></span>";
+    }
+
+    var meta = [];
+    if (it.brand) meta.push(it.brand);
+    meta.push(it.category);
+    meta.push(useLabel(it));
+    meta.push(money(it.price));
+    if (it.source) meta.push(it.source);
+    if (it.hidden) meta.push("🔒 已隐藏");
+    var metaText = meta.join(" · ");
+
+    return '<article class="gear-card' + (it.hidden ? " is-private" : "") + '" data-id="' + esc(it.id) + '" role="button" tabindex="0"' +
+      ' style="--cat:' + esc(catColor(it.category)) + '" aria-label="' +
+      esc((it.hidden ? "已隐藏物品 " : "") + it.name) + ' 详情">' +
+      // 每行都只占一行、超出省略号；全文放进 title，鼠标停一下就有
+      '<div class="gc-head"><h3 class="gc-line" title="' + esc(it.name) + '">' +
+      '<span class="gc-icon" aria-hidden="true">' + esc(catIcon(it.category)) + "</span>" +
+      esc(it.name) + "</h3>" +
+      '<p class="gc-meta gc-line" title="' + esc(metaText) + '">' + esc(metaText) + "</p></div>" +
+      '<div class="gc-figure">' +
+      '<span class="gc-hero"><span class="amount">' + hero + "</span>" +
+      '<span class="unit">每天</span></span>' +
+      '<span class="gc-side"><span class="status' + (live ? " live" : "") + '">' +
+      (live ? "在用" : "已淘汰") + "</span>" +
+      '<span class="aside">' + aside + "</span></span>" +
+      "</div>" +
+      '<div class="gc-foot">' + tail + "</div></article>";
+  }
+
+  var COLUMNS = [
+    { key: "name", label: "名称", sort: "name" },
+    { key: "category", label: "分类" },
+    { key: "status", label: "状态" },
+    { key: "acquired", label: "获得日期", sort: "acquired", num: true },
+    { key: "days", label: "服役天数", sort: "days_held", num: true },
+    { key: "freq", label: "使用频率", sort: "uses_per_year" },
+    { key: "source", label: "渠道" },
+    { key: "price", label: "购买价", sort: "price", num: true },
+    { key: "daily", label: "日均", sort: "daily_cost", num: true },
+    { key: "cpu", label: "次均", sort: "cost_per_use", num: true },
+    { key: "payback", label: "回本日", num: true }
+  ];
+  // 合并早年碎栏的分界：这一年（含）之后一年一栏，之前的并成「XXXX 及更早」。
+  // 2024 是按实际数据定的——2024 起一年十几件，之前一年只有一两件。
+  var EARLY_FROM = 2024;
+
+  function yearOf(it) {
+    var y = parseInt(String(it.acquired || "").slice(0, 4), 10);
+    return isFinite(y) ? y : null;
+  }
+  // 分栏只在卡片视图里做；表格自己有排序表头，再套一层年份栏反而碍事。
+  // 栏内用当前排序，栏与栏之间按年份新→旧——和默认的「获得日期倒序」一致。
+  function flowHTML(sorted) {
+    YEAR_SECTIONS = {};
+    if (state.group !== "year") return sorted.map(cardHTML).join("");
+    var order = [], bucket = {}, label = {}, years = {};
+    sorted.forEach(function (it) {
+      var y = yearOf(it), k;
+      // 早年一年才一两件，一年一栏全是碎栏；EARLY_FROM 之前的合并成一栏。
+      if (y == null) k = "unknown";
+      else if (y < EARLY_FROM) k = "early";
+      else k = String(y);
+      if (!bucket[k]) { bucket[k] = []; order.push(k); years[k] = []; }
+      bucket[k].push(it);
+      if (y != null) years[k].push(y);
+    });
+    order.sort(function (a, b) {
+      if (a === "unknown") return 1;
+      if (b === "unknown") return -1;
+      if (a === "early") return 1;
+      if (b === "early") return -1;
+      return Number(b) - Number(a);
+    });
+    return order.map(function (k) {
+      var list = bucket[k], id = "y-" + k;
+      label[k] = k === "unknown" ? "日期不详"
+        : k === "early" ? (EARLY_FROM - 1) + " 及更早"
+        : k;
+      // 合并栏里的每一年都要能被曲线的刻度锚到同一个 id 上
+      if (k !== "unknown") {
+        years[k].forEach(function (y) { YEAR_SECTIONS[String(y)] = { id: id, n: list.length, label: label[k] }; });
+      }
+      var live = list.filter(function (i) { return i.status === "in_use"; }).length;
+      var head = '<h2 class="year-head"' + (k === "unknown" ? "" : ' id="' + id + '"') + '>' +
+        '<span class="yh-n">' + esc(label[k]) + "</span>" +
+        '<span class="yh-x">' + list.length + " 件入手" +
+        (live ? "　·　" + live + " 件还在用" : "") + "</span></h2>";
+      return head + list.map(cardHTML).join("");
+    }).join("");
+  }
+
+  function renderList(items) {
+    var sorted = sortItems(items);
+
+    // 卡片流（页面主体）
+    $("#flow").innerHTML = sorted.length
+      ? flowHTML(sorted)
+      : (YEAR_SECTIONS = {}, '<p class="quiet-note">没有匹配的物品，试试放宽筛选条件。</p>');
+
+    // 锁着时，隐藏物品只留一行字——不做逐件占位卡。没有隐藏物品就什么都不渲染。
+    var line = $("#hidden-line");
+    if (HIDDEN_COUNT > 0 && !unlocked()) {
+      line.hidden = false;
+      line.innerHTML = "🔒 <b>" + HIDDEN_COUNT + "</b> 件物品已隐藏 · 解锁后显示";
+    } else {
+      line.hidden = true;
+      line.innerHTML = "";
+    }
+
+    // 表格视图：卡片流的表格孪生，所有列一直可排（金额不再是秘密）
+    var head = COLUMNS.map(function (c) {
+      var cls = c.num ? ' class="num"' : "";
+      if (!c.sort) return "<th" + cls + ">" + esc(c.label) + "</th>";
+      var isActive = state.sort === c.sort;
+      var arrow = isActive ? ' <span class="arrow">' + (state.dir > 0 ? "↑" : "↓") + "</span>" : "";
+      return "<th" + cls + ' data-sort="' + esc(c.sort) + '" title="点击排序"' +
+        (isActive ? ' aria-sort="' + (state.dir > 0 ? "ascending" : "descending") + '"' : "") +
+        ">" + esc(c.label) + arrow + "</th>";
+    }).join("");
+
+    var body = sorted.map(function (it) {
+      return '<tr data-id="' + esc(it.id) + '" tabindex="0">' +
+        '<td class="name">' + (it.hidden ? '<span class="tag" title="已隐藏物品">🔒</span> ' : "") + esc(it.name) +
+        (it.brand ? ' <span class="tag">' + esc(it.brand) + "</span>" : "") + "</td>" +
+        '<td><span class="chip"><span class="dot" style="background:' + esc(catColor(it.category)) + '"></span>' +
+        esc(catIcon(it.category) + " " + it.category) + "</span></td>" +
+        "<td>" + (it.status === "in_use" ? "在用"
+          : "已淘汰" + (it.retire_reason ? ' <span class="tag">' + esc(it.retire_reason) + "</span>" : "")) + "</td>" +
+        '<td class="num">' + esc(it.acquired) + "</td>" +
+        '<td class="num">' + num(it.days_held, 0) + "</td>" +
+        "<td>" + esc(useLabel(it)) + "</td>" +
+        "<td>" + esc(it.source || "—") + "</td>" +
+        '<td class="num">' + esc(money(it.price)) + "</td>" +
+        '<td class="num">' + esc(money(it.daily_cost)) + "</td>" +
+        '<td class="num">' + esc(money(it.cost_per_use)) + "</td>" +
+        '<td class="num">' + esc(it.payback_date || "—") + "</td></tr>";
+    }).join("");
+
+    $("#list-table").innerHTML = sorted.length
+      ? '<table class="items"><thead><tr>' + head + "</tr></thead><tbody>" + body + "</tbody></table>"
+      : '<p class="quiet-note">没有匹配的物品，试试放宽筛选条件。</p>';
+
+    $("#f-count").textContent = sorted.length + " / " + ITEMS.length + " 件";
+  }
+
+  /* ---------------- 单件的日均成本衰减曲线（抽屉里） ----------------
+   * 这条是**连续**函数 net_cost / d，逐点采样后连成平滑下降的曲线——
+   * 和上面那条阶梯线不是一类东西，别混。 */
+  function renderDecay(wrap, it) {
+    var net = it.net_cost;
+    var worth = worthLine(it.category);
+    if (net == null) { wrap.innerHTML = emptyState("缺少价格，画不出这条曲线。"); return; }
+    if (net <= 0) { wrap.innerHTML = emptyState("净成本为 0（赠品或已全额回收），无需回本。"); return; }
+
+    var W = wrapWidth(wrap);
+    var H = 208, mL = 46, mR = 18, mT = 22, mB = 30;
+    var days = Math.max(it.days_held, 1);
+    var plotW = Math.max(40, W - mL - mR), plotH = H - mT - mB;
+    // 纵轴上界按「回本线的几倍」取，别让回本线贴着 x 轴；
+    // 横轴则从日均刚好等于上界的那一天起算，曲线才会从左上角贯穿到右下角。
+    var endVal = net / days;
+    var yMax = niceCeil(Math.max(worth * 3, endVal * 2, 0.01));
+    var dStart = Math.max(1, Math.ceil(net / yMax));
+    if (dStart >= days - 1) {
+      dStart = 1;
+      yMax = niceCeil(Math.max(net / Math.max(days * 0.3, 1), worth * 1.6));
+    }
+    var t0 = parseD(it.acquired);
+    function X(d) { return mL + (d - dStart) / Math.max(days - dStart, 1) * plotW; }
+    function Y(v) { return mT + (1 - Math.min(v, yMax) / yMax) * plotH; }
+
+    var pts = [], steps = 140;
+    for (var k = 0; k <= steps; k++) {
+      var d = dStart + (days - dStart) * (k / steps);
+      if (d < 1) d = 1;
+      pts.push([X(d), Y(net / d)]);
+    }
+    var path = pts.map(function (p, i) { return (i ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1); }).join(" ");
+
+    var s = ['<svg width="' + W + '" height="' + H + '" role="img" aria-label="日均成本衰减曲线">'];
+    [0, 0.5, 1].forEach(function (f) {
+      var v = yMax * f, y = Y(v).toFixed(1);
+      s.push('<line x1="' + mL + '" y1="' + y + '" x2="' + (mL + plotW) + '" y2="' + y + '" stroke="var(--grid)" stroke-width="1"/>');
+      s.push('<text x="' + (mL - 6) + '" y="' + (Number(y) + 4) + '" fill="var(--muted)" font-size="11" text-anchor="end">' +
+        esc(money(v, yMax >= 4 ? 0 : 2)) + "</text>");
+    });
+    // 回本线（阈值参考线，另一支色相 + 直接标注）
+    var wy = Y(worth).toFixed(1);
+    s.push('<line x1="' + mL + '" y1="' + wy + '" x2="' + (mL + plotW) + '" y2="' + wy +
+      '" stroke="var(--accent-2)" stroke-width="2" stroke-linecap="round"/>');
+    s.push('<text x="' + (mL + plotW * 0.2).toFixed(1) + '" y="' + (Number(wy) - 7) +
+      '" fill="var(--ink-2)" font-size="11" text-anchor="middle">回本线 ' + esc(money(worth)) + '/天</text>');
+    // 曲线
+    s.push('<path d="' + path + '" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>');
+    // 回本点
+    var pbDay = net / worth;
+    if (pbDay <= days && pbDay >= dStart) {
+      var px = X(pbDay).toFixed(1);
+      s.push('<circle cx="' + px + '" cy="' + wy + '" r="5" fill="var(--accent-2)" stroke="var(--surface)" stroke-width="2"/>');
+      s.push('<text x="' + px + '" y="' + (Number(wy) + 15) + '" fill="var(--ink-2)" font-size="11" text-anchor="middle">回本日 ' +
+        esc(it.payback_date || fmtD(t0 + Math.ceil(pbDay) * DAY)) + "</text>");
+    }
+    // 终点直接标注
+    var ex = X(days), ey = Y(net / days);
+    s.push('<circle cx="' + ex.toFixed(1) + '" cy="' + ey.toFixed(1) + '" r="4" fill="var(--accent)" stroke="var(--surface)" stroke-width="2"/>');
+    s.push('<text x="' + ex.toFixed(1) + '" y="' + (ey - 9).toFixed(1) + '" fill="var(--ink-2)" font-size="11" text-anchor="end">' +
+      esc(money(net / days)) + "/天</text>");
+    // x 轴
+    s.push('<line x1="' + mL + '" y1="' + (mT + plotH) + '" x2="' + (mL + plotW) + '" y2="' + (mT + plotH) + '" stroke="var(--axis)" stroke-width="1"/>');
+    s.push('<text x="' + mL + '" y="' + (H - 10) + '" fill="var(--muted)" font-size="11">' +
+      esc(dStart > 1 ? fmtD(t0 + (dStart - 1) * DAY) + "（第 " + dStart + " 天）" : it.acquired) + "</text>");
+    s.push('<text x="' + (mL + plotW) + '" y="' + (H - 10) + '" fill="var(--muted)" font-size="11" text-anchor="end">' +
+      esc(it.retired || "今天") + "</text>");
+    s.push('<line class="cross" x1="0" y1="' + mT + '" x2="0" y2="' + (mT + plotH) + '" stroke="var(--axis)" stroke-width="1" opacity="0"/>');
+    s.push('<rect class="hit" x="' + mL + '" y="' + mT + '" width="' + plotW + '" height="' + plotH + '" fill="transparent"/>');
+    s.push("</svg>");
+    wrap.innerHTML = s.join("");
+
+    var tip = ensureTip(wrap);
+    var hit = wrap.querySelector(".hit"), cross = wrap.querySelector(".cross");
+    function move(ev) {
+      var box = wrap.querySelector("svg").getBoundingClientRect();
+      var rel = Math.min(Math.max(ev.clientX - box.left, mL), mL + plotW);
+      var dd = Math.max(dStart, Math.round(dStart + (rel - mL) / plotW * Math.max(days - dStart, 1)));
+      var v = net / dd;
+      cross.setAttribute("x1", rel); cross.setAttribute("x2", rel); cross.setAttribute("opacity", "1");
+      showTip(wrap, tip, rel, Y(v), money(v) + "/天",
+        fmtD(t0 + (dd - 1) * DAY) + " · 第 " + dd + " 天", "var(--accent)");
+    }
+    hit.addEventListener("pointermove", move);
+    hit.addEventListener("pointerleave", function () { hideTip(tip); cross.setAttribute("opacity", "0"); });
+  }
+
+  /* ---------------- 详情抽屉 ---------------- */
+  function openDetail(id) {
+    var it = byId(id);
+    if (!it) return;
+    state.selected = id;
+    renderDetail();
+    $("#drawer").classList.add("show");
+    $("#backdrop").classList.add("show");
+    $("#drawer").focus();
+  }
+  function closeDetail() {
+    state.selected = null;
+    $("#drawer").classList.remove("show");
+    $("#backdrop").classList.remove("show");
+  }
+  function renderDetail() {
+    var drawer = $("#drawer");
+    if (!state.selected) { drawer.innerHTML = ""; return; }
+    var it = byId(state.selected);
+    if (!it) { drawer.innerHTML = ""; return; }
+    var worth = worthLine(it.category);
+    var net = it.net_cost;
+
+    var paybackBlock = "";
+    if (net != null && net > 0) {
+      // 与卡片上同一个口径（payback()），这里多给一行日期
+      var need = Math.ceil(net / worth);
+      var pct = Math.max(0, Math.min(1, it.days_held / need));
+      var left = need - it.days_held;
+      var pbDate = it.payback_date || fmtD(parseD(it.acquired) + need * DAY);
+      paybackBlock =
+        '<div style="margin-top:26px">' +
+        '<div style="display:flex;justify-content:space-between;font-size:12.5px;color:var(--muted)">' +
+        "<span>回本进度（回本线 " + esc(money(worth)) + "/天）</span><span>" + Math.round(pct * 100) + "%</span></div>" +
+        '<div class="meter"><i style="width:' + (pct * 100).toFixed(1) + '%"></i></div>' +
+        '<div style="font-size:12.5px;color:var(--ink-2);margin-top:7px">' +
+        (left <= 0 ? "已于 " + esc(pbDate) + " 回本" : "还需 " + left + " 天回本（预计 " + esc(pbDate) + "）") +
+        "</div></div>";
+    }
+
+    drawer.innerHTML =
+      '<div class="drawer-head"><div>' +
+      '<h2 id="d-title">' + esc((it.hidden ? "🔒 " : catIcon(it.category) + " ") + it.name) + "</h2>" +
+      '<p class="gc-meta">' + esc([it.brand, it.category, useLabel(it)].filter(Boolean).join(" · ")) +
+      (it.hidden ? "　·　已隐藏物品" : "") + "</p></div>" +
+      '<button class="btn close" type="button" id="d-close" aria-label="关闭">×</button></div>' +
+      '<div style="margin-top:14px;display:flex;gap:16px;flex-wrap:wrap;align-items:center">' +
+      '<span class="chip"><span class="dot" style="background:' + esc(catColor(it.category)) + '"></span>' +
+      (it.status === "in_use" ? "在用" :
+        "已淘汰" + (it.retire_reason ? "（" + esc(it.retire_reason) + "）" : "")) + "</span>" +
+      '<span class="tags">' + (it.tags || []).map(function (t) { return '<span class="tag">#' + esc(t) + "</span>"; }).join("") + "</span>" +
+      "</div>" +
+      '<dl class="kv">' +
+      "<dt>获得日期</dt><dd>" + esc(it.acquired) + "</dd>" +
+      "<dt>淘汰日期</dt><dd>" + esc(it.retired || "—（仍在用）") + "</dd>" +
+      "<dt>服役天数</dt><dd>" + num(it.days_held, 0) + " 天（约 " + num(it.days_held / 365, 1) + " 年）</dd>" +
+      "<dt>使用频率</dt><dd>" + esc(useLabel(it)) + " · 年 " + num(it.uses_per_year || 0, 0) +
+        " 次 · 估算累计 " + num(usesOf(it), 0) + " 次</dd>" +
+      "<dt>获得渠道</dt><dd>" + esc(it.source || "—") + "</dd>" +
+      "<dt>购买价</dt><dd>" + esc(money(it.price)) + "</dd>" +
+      "<dt>二手回收</dt><dd>" + esc(it.resale == null ? "—" : money(it.resale)) + "</dd>" +
+      "<dt>净成本</dt><dd>" + esc(money(net)) + "</dd>" +
+      "<dt>日均成本</dt><dd>" + esc(money(it.daily_cost)) + "/天</dd>" +
+      "<dt>次均成本</dt><dd>" + esc(money(it.cost_per_use)) + "/次</dd>" +
+      "<dt>回本日</dt><dd>" + esc(it.payback_date || "—") + "</dd>" +
+      "</dl>" +
+      paybackBlock +
+      '<h3 style="margin-top:30px">日均成本衰减曲线</h3>' +
+      '<p class="gc-meta" style="margin:4px 0 10px">净成本 ÷ 已持有天数，随时间下降；横线是该分类的回本线。</p>' +
+      '<div class="chart-wrap" id="d-decay"></div>' +
+      (it.note ? '<div class="note-box">' + esc(it.note) + "</div>" : "");
+
+    $("#d-close").addEventListener("click", closeDetail);
+    renderDecay($("#d-decay"), it);
+  }
+
+  /* ---------------- 渲染总入口 ---------------- */
+  function renderAll() {
+    var items = filteredItems();
+    renderOpening();
+    renderList(items);
+    renderBurnAll();
+    renderGantt(items);
+    if ($("#fold-stats").open) renderStats(items);
+    if (state.selected) renderDetail();
+  }
+
+  /* ---------------- 初始化 ---------------- */
+  function fillSelect(sel, options, placeholder) {
+    sel.innerHTML = '<option value="">' + esc(placeholder) + "</option>" +
+      options.map(function (o) {
+        return '<option value="' + esc(o.value) + '">' + esc(o.label) + "</option>";
+      }).join("");
+  }
+  // 筛选器的选项跟着 ITEMS 走：解锁后并进来的隐藏物品可能带来新的分类/标签。
+  function fillFilters() {
+    var keepCat = state.cat, keepTag = state.tag, keepPeriod = state.period;
+    var usedCats = [];
+    ITEMS.forEach(function (i) { if (usedCats.indexOf(i.category) < 0) usedCats.push(i.category); });
+    fillSelect($("#f-cat"), usedCats.map(function (c) { return { value: c, label: catIcon(c) + " " + c }; }), "全部分类");
+    var usedPeriods = PERIOD_ORDER.filter(function (p) {
+      return ITEMS.some(function (i) { return i.period === p; });
+    });
+    fillSelect($("#f-period"), usedPeriods.map(function (p) { return { value: p, label: periodLabel(p) }; }), "全部使用周期");
+    var tags = [];
+    ITEMS.forEach(function (i) {
+      (i.tags || []).forEach(function (t) { if (tags.indexOf(t) < 0) tags.push(t); });
+    });
+    tags.sort();
+    fillSelect($("#f-tag"), tags.map(function (t) { return { value: t, label: "#" + t }; }), "全部标签");
+    $("#f-cat").value = keepCat; $("#f-tag").value = keepTag; $("#f-period").value = keepPeriod;
+    state.cat = $("#f-cat").value; state.tag = $("#f-tag").value; state.period = $("#f-period").value;
+  }
+
+  function init() {
+    $("#site-sub").textContent = GEAR_META.generated_at
+      ? "更新于 " + String(GEAR_META.generated_at).slice(0, 10)
+      : "";
+    fillFilters();
+
+    $("#f-sort").innerHTML = SORTS.map(function (s) {
+      return '<option value="' + esc(s.key) + '">' + esc(s.label) + "</option>";
+    }).join("");
+    $("#f-sort").value = state.sort;
+
+    // 工具条是 sticky 的，且会随视口宽度换行（一行 56px、两行 92px…）。
+    // 表格的粘性表头、年份栏的锚点让位都要按它的实际高度来，所以实测一次写进
+    // --tb-h，resize 时重算。写死数字踩过一次：加了「按年/不分栏」开关之后
+    // 工具条从 41px 变成 92px，表头正好被盖住。
+    function syncToolbarH() {
+      var tb = $("#toolbar");
+      if (!tb) return;
+      document.documentElement.style.setProperty("--tb-h", Math.round(tb.getBoundingClientRect().height) + "px");
+    }
+    syncToolbarH();
+    window.addEventListener("resize", syncToolbarH);
+
+    // 分栏开关：只作用于卡片视图，表格不受影响
+    function setGroup(g) {
+      state.group = g;
+      $("#g-year").setAttribute("aria-pressed", String(g === "year"));
+      $("#g-flat").setAttribute("aria-pressed", String(g !== "year"));
+      renderAll();
+    }
+    $("#g-year").addEventListener("click", function () { setGroup("year"); });
+    $("#g-flat").addEventListener("click", function () { setGroup("none"); });
+
+    // 曲线上的年份刻度 → 跳到卡片流里那一年。自己接管滚动而不是让浏览器
+    // 处理 hash：sticky 工具条会盖住栏头（靠 scroll-margin-top 让位），
+    // 落地后再闪一下背景，告诉眼睛停在哪儿了。
+    document.addEventListener("click", function (e) {
+      var a = e.target.closest && e.target.closest("a.yr-link");
+      if (!a) return;
+      var el = document.getElementById(a.getAttribute("data-target"));
+      if (!el) return;                       // 那一年被筛掉了，就什么也不做
+      e.preventDefault();
+      if (state.view !== "card") return;
+      // 工具条会换行，高度不固定（实测 1600px 下 92px、窄屏更高），
+      // 所以让位距离在点的时候按实测高度给，CSS 里那条只是无 JS 时的兜底。
+      el.scrollIntoView({ behavior: PREFERS_STILL ? "auto" : "smooth", block: "start" });
+      el.classList.remove("flash");
+      void el.offsetWidth;                   // 重启动画
+      el.classList.add("flash");
+    });
+
+    $("#f-q").addEventListener("input", function (e) { state.q = e.target.value; renderAll(); });
+    $("#f-cat").addEventListener("change", function (e) { state.cat = e.target.value; renderAll(); });
+    $("#f-status").addEventListener("change", function (e) { state.status = e.target.value; renderAll(); });
+    $("#f-period").addEventListener("change", function (e) { state.period = e.target.value; renderAll(); });
+    $("#f-tag").addEventListener("change", function (e) { state.tag = e.target.value; renderAll(); });
+    $("#f-reset").addEventListener("click", function () {
+      state.q = state.cat = state.status = state.period = state.tag = "";
+      $("#f-q").value = ""; $("#f-cat").value = ""; $("#f-status").value = "";
+      $("#f-period").value = ""; $("#f-tag").value = "";
+      renderAll();
+    });
+    $("#f-sort").addEventListener("change", function (e) {
+      var def = sortDef(e.target.value);
+      state.sort = e.target.value;
+      state.dir = def.text ? 1 : -1;
+      renderAll();
+    });
+
+    function setView(v) {
+      state.view = v;
+      $("#v-table").setAttribute("aria-pressed", v === "table" ? "true" : "false");
+      $("#v-card").setAttribute("aria-pressed", v === "card" ? "true" : "false");
+      $("#list-table").hidden = v !== "table";
+      $("#flow").hidden = v !== "card";
+    }
+    $("#v-table").addEventListener("click", function () { setView("table"); });
+    $("#v-card").addEventListener("click", function () { setView("card"); });
+    setView("card");
+
+    // 统计默认折叠：折着的时候容器宽度是 0，展开时要按真实宽度画一次
+    var fold = $("#fold-stats");
+    fold.addEventListener("toggle", function () { if (fold.open) renderStats(filteredItems()); });
+
+    // 列表/榜单/卡片/变更点表的事件委托
+    document.addEventListener("click", function (e) {
+      var th = e.target.closest && e.target.closest("th[data-sort]");
+      if (th) {
+        var key = th.getAttribute("data-sort");
+        if (state.sort === key) state.dir = -state.dir;
+        else { state.sort = key; state.dir = sortDef(key).text ? 1 : -1; }
+        $("#f-sort").value = state.sort;
+        renderAll();
+        return;
+      }
+      var row = e.target.closest && e.target.closest("[data-id]");
+      if (row && (row.closest("#list-table") || row.closest("#flow") ||
+                  row.closest(".rank") || row.closest("#stat-burn"))) {
+        openDetail(row.getAttribute("data-id"));
+      }
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") { closeDetail(); openLockForm(false); }
+      if (e.key === "Enter" || e.key === " ") {
+        var row = e.target.closest && e.target.closest('tr[data-id], [role="button"][data-id]');
+        if (row && !row.classList.contains("bp-hit")) {
+          e.preventDefault();
+          openDetail(row.getAttribute("data-id"));
+        }
+      }
+    });
+    $("#backdrop").addEventListener("click", closeDetail);
+
+    // 解锁交互：解的是「隐藏的物品」，不是金额
+    $("#lock-toggle").addEventListener("click", function () {
+      if (unlocked()) { doLock(); return; }
+      openLockForm($("#lock-form").hidden);
+    });
+    $("#lock-cancel").addEventListener("click", function () { openLockForm(false); });
+    $("#lock-form").addEventListener("submit", function (e) {
+      e.preventDefault();
+      doUnlock($("#lock-pw").value);
+    });
+
+    var resizeTimer = null;
+    window.addEventListener("resize", function () {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(renderAll, 150);
+    });
+    // 越过侧栏断点时竖版/横版要互换，resize 之外再挂一次更稳
+    if (GUTTER_MQ && GUTTER_MQ.addEventListener) {
+      GUTTER_MQ.addEventListener("change", function () { renderAll(); });
+    }
+
+    syncLockAffordance();
+    renderAll();
+
+    // 自动解锁：本标签页里解过一次就不再问（同 wm-blog 的 sessionStorage 缓存）
+    var cached = storedPassword();
+    if (cached && window.crypto && crypto.subtle && GEAR_SECRET && GEAR_SECRET.ciphertext) {
+      decryptSecret(cached).then(function (data) {
+        applySecret(data);
+        syncLockAffordance();
+        fillFilters();
+        renderAll();
+      }).catch(function () {
+        clearPassword();
+      });
+    }
+  }
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
+  else init();
+})();
+</script>
+</body>
+</html>
